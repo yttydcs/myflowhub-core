@@ -8,6 +8,7 @@ import (
 
 	core "MyFlowHub-Core/internal/core"
 	"MyFlowHub-Core/internal/core/header"
+	"MyFlowHub-Core/internal/core/process"
 	"MyFlowHub-Core/internal/core/reader"
 )
 
@@ -38,6 +39,7 @@ type Server struct {
 	lst    core.IListener
 	rFac   ReaderFactory
 	nodeID uint32
+	sender *process.SendDispatcher
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -74,6 +76,13 @@ func New(opts Options) (*Server, error) {
 	if opts.NodeID == 0 {
 		opts.NodeID = 1
 	}
+	// 初始化发送调度器（使用同一配置来源）
+	var sendDisp *process.SendDispatcher
+	if sd, err := process.NewSendDispatcherFromConfig(opts.Config, opts.Logger); err == nil {
+		sendDisp = sd
+	} else {
+		return nil, err
+	}
 	return &Server{
 		opts:   opts,
 		log:    opts.Logger,
@@ -84,6 +93,7 @@ func New(opts Options) (*Server, error) {
 		lst:    opts.Listener,
 		rFac:   opts.ReaderFactory,
 		nodeID: opts.NodeID,
+		sender: sendDisp,
 	}, nil
 }
 
@@ -98,8 +108,8 @@ func (s *Server) Start(ctx context.Context) error {
 		return errors.New("server already started")
 	}
 	s.ctx, s.cancel = context.WithCancel(ctx)
-	// 在上下文中注入 server 引用以便路由/登录等处理使用
-	s.ctx = context.WithValue(s.ctx, ctxKeyServer{}, s)
+	// 使用匿名 key 避免额外依赖
+	s.ctx = context.WithValue(s.ctx, struct{ S string }{"server"}, s)
 	s.cm.SetHooks(core.ConnectionHooks{
 		OnAdd: func(conn core.IConnection) {
 			s.proc.OnListen(conn)
@@ -160,6 +170,9 @@ func (s *Server) Stop(ctx context.Context) error {
 	if d, ok := s.proc.(interface{ Shutdown() }); ok {
 		d.Shutdown()
 	}
+	if s.sender != nil {
+		s.sender.Shutdown()
+	}
 	_ = s.lst.Close()
 	done := make(chan struct{})
 	go func() {
@@ -179,14 +192,6 @@ func (s *Server) ConnManager() core.IConnectionManager { return s.cm }
 func (s *Server) Process() core.IProcess               { return s.proc }
 func (s *Server) HeaderCodec() core.IHeaderCodec       { return s.codec }
 func (s *Server) NodeID() uint32                       { return s.nodeID }
-func FromContextServer(ctx context.Context) *Server {
-	v := ctx.Value(ctxKeyServer{})
-	if srv, ok := v.(*Server); ok {
-		return srv
-	}
-	return nil
-}
-
 func (s *Server) Send(ctx context.Context, connID string, hdr header.IHeader, payload []byte) error {
 	conn, ok := s.cm.Get(connID)
 	if !ok {
@@ -195,5 +200,28 @@ func (s *Server) Send(ctx context.Context, connID string, hdr header.IHeader, pa
 	if err := s.proc.OnSend(ctx, conn, hdr, payload); err != nil {
 		return err
 	}
-	return conn.SendWithHeader(hdr, payload, s.codec)
+	if s.sender == nil {
+		return conn.SendWithHeader(hdr, payload, s.codec)
+	}
+	return s.sender.Dispatch(ctx, conn, hdr, payload, s.codec, nil)
+}
+
+// Broadcast 通过发送调度器广播一帧（不触发 OnSend 钩子对每个连接重复调用，仅一次校验）。
+func (s *Server) Broadcast(ctx context.Context, hdr header.IHeader, payload []byte) error {
+	if s.sender == nil {
+		return s.cm.Broadcast(payload) // 回退：原始 payload（假设已编码）
+	}
+	var firstErr error
+	s.cm.Range(func(c core.IConnection) bool {
+		// 不为每个连接重复调用 OnSend，假设 hdr/payload 已审计
+		if err := s.sender.Dispatch(ctx, c, hdr, payload, s.codec, func(e error) {
+			if e != nil && firstErr == nil {
+				firstErr = e
+			}
+		}); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		return true
+	})
+	return firstErr
 }

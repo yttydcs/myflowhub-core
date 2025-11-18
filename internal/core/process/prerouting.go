@@ -6,7 +6,6 @@ import (
 
 	core "MyFlowHub-Core/internal/core"
 	"MyFlowHub-Core/internal/core/header"
-	"MyFlowHub-Core/internal/core/server"
 )
 
 // PreRoutingProcess 属于核心层：在子协议分发前执行基础路由逻辑。
@@ -36,7 +35,8 @@ func (p *PreRoutingProcess) OnClose(conn core.IConnection) {
 }
 
 func (p *PreRoutingProcess) OnReceive(ctx context.Context, conn core.IConnection, hdr header.IHeader, payload []byte) {
-	srv := server.FromContextServer(ctx)
+	val := ctx.Value(struct{ S string }{"server"})
+	srv, _ := val.(core.IServer)
 	if srv == nil {
 		p.log.Warn("无法获取 server 上下文，跳过路由")
 		return

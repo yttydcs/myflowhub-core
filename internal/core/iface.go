@@ -29,6 +29,8 @@ type IServer interface {
 	Process() IProcess
 	// HeaderCodec 返回编解码器。
 	HeaderCodec() IHeaderCodec
+	// NodeID 返回当前节点 ID。
+	NodeID() uint32
 	// Send 将 header+payload 发送给指定连接，并触发处理钩子。
 	Send(ctx context.Context, connID string, hdr header.IHeader, payload []byte) error
 }
