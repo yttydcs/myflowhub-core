@@ -6,14 +6,13 @@ import (
 	"sync/atomic"
 
 	core "MyFlowHub-Core/internal/core"
-	"MyFlowHub-Core/internal/core/header"
 )
 
 // QueueSelectStrategy 定义事件映射到队列的策略接口。
 // 实现需要在 queueCount<=0 或 queueCount==1 时返回 0。
 // 必须保证返回值在 [0, queueCount) 范围。
 type QueueSelectStrategy interface {
-	SelectQueue(conn core.IConnection, hdr header.IHeader, queueCount int) int
+	SelectQueue(conn core.IConnection, hdr core.IHeader, queueCount int) int
 	Name() string
 }
 
@@ -21,7 +20,7 @@ type QueueSelectStrategy interface {
 type ConnHashStrategy struct{}
 
 func (ConnHashStrategy) Name() string { return "conn" }
-func (ConnHashStrategy) SelectQueue(conn core.IConnection, hdr header.IHeader, n int) int {
+func (ConnHashStrategy) SelectQueue(conn core.IConnection, hdr core.IHeader, n int) int {
 	if n <= 1 {
 		return 0
 	}
@@ -40,7 +39,7 @@ func (ConnHashStrategy) SelectQueue(conn core.IConnection, hdr header.IHeader, n
 type SubProtoStrategy struct{}
 
 func (SubProtoStrategy) Name() string { return "subproto" }
-func (SubProtoStrategy) SelectQueue(_ core.IConnection, hdr header.IHeader, n int) int {
+func (SubProtoStrategy) SelectQueue(_ core.IConnection, hdr core.IHeader, n int) int {
 	if n <= 1 {
 		return 0
 	}
@@ -54,7 +53,7 @@ func (SubProtoStrategy) SelectQueue(_ core.IConnection, hdr header.IHeader, n in
 type SourceTargetStrategy struct{}
 
 func (SourceTargetStrategy) Name() string { return "source_target" }
-func (SourceTargetStrategy) SelectQueue(_ core.IConnection, hdr header.IHeader, n int) int {
+func (SourceTargetStrategy) SelectQueue(_ core.IConnection, hdr core.IHeader, n int) int {
 	if n <= 1 {
 		return 0
 	}
@@ -82,7 +81,7 @@ type RoundRobinStrategy struct{ counter uint64 }
 func (RoundRobinStrategy) Name() string { return "roundrobin" }
 
 // 这里不做原子自增（可后续优化）；当前 dispatcher 事件入队本身可跨 goroutine，需线程安全。
-func (r *RoundRobinStrategy) SelectQueue(_ core.IConnection, _ header.IHeader, n int) int {
+func (r *RoundRobinStrategy) SelectQueue(_ core.IConnection, _ core.IHeader, n int) int {
 	if n <= 1 {
 		return 0
 	}

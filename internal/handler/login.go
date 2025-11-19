@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 
 	core "MyFlowHub-Core/internal/core"
-	"MyFlowHub-Core/internal/core/header"
 )
 
 // LoginHandler (SubProto=2) 负责分配节点 ID；自增且不重复。
@@ -28,7 +27,9 @@ func NewLoginHandler(log *slog.Logger) *LoginHandler {
 
 func (h *LoginHandler) SubProto() uint8 { return 2 }
 
-func (h *LoginHandler) OnReceive(ctx context.Context, conn core.IConnection, hdr header.IHeader, payload []byte) {
+func (h *LoginHandler) OnReceive(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) {
+	_ = ctx
+	_ = payload
 	id := globalNodeID.Add(1) - 1
 	conn.SetMeta("nodeID", id)
 	respObj := map[string]uint32{"id": id}

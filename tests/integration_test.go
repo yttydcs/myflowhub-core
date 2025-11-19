@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
-	"net"
 	"testing"
 	"time"
 
@@ -321,36 +320,3 @@ func TestConnectionManager(t *testing.T) {
 		t.Error("不应该能获取到已移除的连接")
 	}
 }
-
-// mockConnection 用于测试的模拟连接
-type mockConnection struct {
-	id string
-}
-
-func (m *mockConnection) ID() string                      { return m.id }
-func (m *mockConnection) Close() error                    { return nil }
-func (m *mockConnection) OnReceive(_ core.ReceiveHandler) {}
-func (m *mockConnection) SetMeta(_ string, _ any)         {}
-func (m *mockConnection) GetMeta(_ string) (any, bool)    { return nil, false }
-func (m *mockConnection) Metadata() map[string]any        { return nil }
-func (m *mockConnection) LocalAddr() net.Addr {
-	return mockAddr{}
-}
-func (m *mockConnection) RemoteAddr() net.Addr {
-	return mockAddr{}
-}
-func (m *mockConnection) Reader() core.IReader                       { return nil }
-func (m *mockConnection) SetReader(_ core.IReader)                   {}
-func (m *mockConnection) DispatchReceive(_ header.IHeader, _ []byte) {}
-func (m *mockConnection) RawConn() net.Conn {
-	return nil
-}
-func (m *mockConnection) Send(_ []byte) error { return nil }
-func (m *mockConnection) SendWithHeader(_ header.IHeader, _ []byte, _ core.IHeaderCodec) error {
-	return nil
-}
-
-type mockAddr struct{}
-
-func (mockAddr) Network() string { return "tcp" }
-func (mockAddr) String() string  { return "127.0.0.1:9999" }

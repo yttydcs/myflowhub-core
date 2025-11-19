@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	core "MyFlowHub-Core/internal/core"
-	"MyFlowHub-Core/internal/core/header"
 	"MyFlowHub-Core/internal/core/process"
 	"MyFlowHub-Core/internal/core/reader"
 )
@@ -97,9 +96,6 @@ func New(opts Options) (*Server, error) {
 	}, nil
 }
 
-// context key 用于在处理链路中获取 server 引用
-type ctxKeyServer struct{}
-
 // Start 启动监听与连接循环。
 func (s *Server) Start(ctx context.Context) error {
 	s.mu.Lock()
@@ -110,21 +106,21 @@ func (s *Server) Start(ctx context.Context) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 	// 使用匿名 key 避免额外依赖
 	s.ctx = context.WithValue(s.ctx, struct{ S string }{"server"}, s)
-	s.cm.SetHooks(core.ConnectionHooks{
-		OnAdd: func(conn core.IConnection) {
-			s.proc.OnListen(conn)
-			s.wg.Add(1)
-			go s.serveConn(conn)
-		},
-		OnRemove: func(conn core.IConnection) {
-			s.proc.OnClose(conn)
-		},
-	})
+	onAdd := func(c core.IConnection) {
+		c.OnReceive(func(c core.IConnection, hdr core.IHeader, payload []byte) {
+			ctx2 := context.WithValue(ctx, struct{ S string }{"server"}, s)
+			s.proc.OnReceive(ctx2, c, hdr, payload)
+		})
+		s.proc.OnListen(c)
+		s.wg.Add(1)
+		go s.serveConn(c)
+	}
+	s.cm.SetHooks(core.ConnectionHooks{OnAdd: onAdd, OnRemove: func(c core.IConnection) { s.proc.OnClose(c) }})
 	s.start = true
 	go func() {
 		if err := s.lst.Listen(s.ctx, s.cm); err != nil {
 			s.log.Error("listener exited", "err", err)
-			s.Stop(context.Background())
+			_ = s.Stop(context.Background())
 		}
 	}()
 	return nil
@@ -132,19 +128,16 @@ func (s *Server) Start(ctx context.Context) error {
 
 func (s *Server) serveConn(conn core.IConnection) {
 	defer s.wg.Done()
-	conn.OnReceive(func(c core.IConnection, hdr header.IHeader, payload []byte) {
-		s.proc.OnReceive(s.ctx, c, hdr, payload)
-	})
-	reader := conn.Reader()
-	if reader == nil {
-		reader = s.rFac(conn)
-		conn.SetReader(reader)
+	r := conn.Reader()
+	if r == nil {
+		r = s.rFac(conn)
+		conn.SetReader(r)
 	}
-	if reader == nil {
+	if r == nil {
 		s.log.Error("no reader available", "conn", conn.ID())
 		return
 	}
-	if err := reader.ReadLoop(s.ctx, conn, s.codec); err != nil {
+	if err := r.ReadLoop(s.ctx, conn, s.codec); err != nil {
 		s.log.Warn("read loop exit", "conn", conn.ID(), "err", err)
 	}
 	if err := s.cm.Remove(conn.ID()); err != nil {
@@ -192,7 +185,7 @@ func (s *Server) ConnManager() core.IConnectionManager { return s.cm }
 func (s *Server) Process() core.IProcess               { return s.proc }
 func (s *Server) HeaderCodec() core.IHeaderCodec       { return s.codec }
 func (s *Server) NodeID() uint32                       { return s.nodeID }
-func (s *Server) Send(ctx context.Context, connID string, hdr header.IHeader, payload []byte) error {
+func (s *Server) Send(ctx context.Context, connID string, hdr core.IHeader, payload []byte) error {
 	conn, ok := s.cm.Get(connID)
 	if !ok {
 		return errors.New("conn not found")
@@ -207,7 +200,7 @@ func (s *Server) Send(ctx context.Context, connID string, hdr header.IHeader, pa
 }
 
 // Broadcast 通过发送调度器广播一帧（不触发 OnSend 钩子对每个连接重复调用，仅一次校验）。
-func (s *Server) Broadcast(ctx context.Context, hdr header.IHeader, payload []byte) error {
+func (s *Server) Broadcast(ctx context.Context, hdr core.IHeader, payload []byte) error {
 	if s.sender == nil {
 		return s.cm.Broadcast(payload) // 回退：原始 payload（假设已编码）
 	}

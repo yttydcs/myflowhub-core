@@ -12,22 +12,20 @@ import (
 // mockConnQS implements core.IConnection minimally for queue strategy tests.
 type mockConnQS struct{ id string }
 
-func (m *mockConnQS) ID() string                                 { return m.id }
-func (m *mockConnQS) Close() error                               { return nil }
-func (m *mockConnQS) OnReceive(_ core.ReceiveHandler)            {}
-func (m *mockConnQS) SetMeta(_ string, _ any)                    {}
-func (m *mockConnQS) GetMeta(_ string) (any, bool)               { return nil, false }
-func (m *mockConnQS) Metadata() map[string]any                   { return nil }
-func (m *mockConnQS) LocalAddr() net.Addr                        { return dummyAddr("local") }
-func (m *mockConnQS) RemoteAddr() net.Addr                       { return dummyAddr("remote") }
-func (m *mockConnQS) Reader() core.IReader                       { return nil }
-func (m *mockConnQS) SetReader(_ core.IReader)                   {}
-func (m *mockConnQS) DispatchReceive(_ header.IHeader, _ []byte) {}
-func (m *mockConnQS) RawConn() net.Conn                          { return nil }
-func (m *mockConnQS) Send(_ []byte) error                        { return nil }
-func (m *mockConnQS) SendWithHeader(_ header.IHeader, _ []byte, _ core.IHeaderCodec) error {
-	return nil
-}
+func (m *mockConnQS) ID() string                                                         { return m.id }
+func (m *mockConnQS) Close() error                                                       { return nil }
+func (m *mockConnQS) OnReceive(_ core.ReceiveHandler)                                    {}
+func (m *mockConnQS) SetMeta(_ string, _ any)                                            {}
+func (m *mockConnQS) GetMeta(_ string) (any, bool)                                       { return nil, false }
+func (m *mockConnQS) Metadata() map[string]any                                           { return nil }
+func (m *mockConnQS) LocalAddr() net.Addr                                                { return dummyAddr("local") }
+func (m *mockConnQS) RemoteAddr() net.Addr                                               { return dummyAddr("remote") }
+func (m *mockConnQS) Reader() core.IReader                                               { return nil }
+func (m *mockConnQS) SetReader(_ core.IReader)                                           {}
+func (m *mockConnQS) DispatchReceive(_ core.IHeader, _ []byte)                           {}
+func (m *mockConnQS) RawConn() net.Conn                                                  { return nil }
+func (m *mockConnQS) Send(_ []byte) error                                                { return nil }
+func (m *mockConnQS) SendWithHeader(_ core.IHeader, _ []byte, _ core.IHeaderCodec) error { return nil }
 
 type dummyAddr string
 

@@ -6,7 +6,6 @@ import (
 	"log/slog"
 
 	core "MyFlowHub-Core/internal/core"
-	"MyFlowHub-Core/internal/core/header"
 )
 
 // EchoHandler 回显子协议实现。
@@ -23,7 +22,8 @@ func NewEchoHandler(log *slog.Logger) *EchoHandler {
 
 func (h *EchoHandler) SubProto() uint8 { return SubProtoEcho }
 
-func (h *EchoHandler) OnReceive(ctx context.Context, conn core.IConnection, hdr header.IHeader, payload []byte) {
+func (h *EchoHandler) OnReceive(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) {
+	_ = ctx
 	tcp, ok := ToHeaderTcp(hdr)
 	if !ok {
 		h.log.Error("header 类型错误")

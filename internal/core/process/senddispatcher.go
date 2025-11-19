@@ -10,7 +10,6 @@ import (
 
 	core "MyFlowHub-Core/internal/core"
 	coreconfig "MyFlowHub-Core/internal/core/config"
-	"MyFlowHub-Core/internal/core/header"
 )
 
 // SendOptions 定义发送调度参数。
@@ -24,7 +23,7 @@ type SendOptions struct {
 type sendTask struct {
 	ctx     context.Context
 	conn    core.IConnection
-	hdr     header.IHeader
+	hdr     core.IHeader
 	payload []byte
 	codec   core.IHeaderCodec
 	cb      func(error)
@@ -120,7 +119,7 @@ func (d *SendDispatcher) ensureStarted(ctx context.Context) {
 }
 
 // Dispatch 发送任务。
-func (d *SendDispatcher) Dispatch(ctx context.Context, conn core.IConnection, hdr header.IHeader, payload []byte, codec core.IHeaderCodec, cb func(error)) error {
+func (d *SendDispatcher) Dispatch(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte, codec core.IHeaderCodec, cb func(error)) error {
 	if conn == nil {
 		return errors.New("nil connection")
 	}
@@ -137,7 +136,7 @@ func (d *SendDispatcher) Dispatch(ctx context.Context, conn core.IConnection, hd
 	}
 }
 
-func (d *SendDispatcher) selectQueue(conn core.IConnection, hdr header.IHeader) int {
+func (d *SendDispatcher) selectQueue(conn core.IConnection, hdr core.IHeader) int {
 	if d.chanCount == 1 {
 		return 0
 	}
@@ -148,8 +147,8 @@ func (d *SendDispatcher) selectQueue(conn core.IConnection, hdr header.IHeader) 
 		return int(h.Sum32() % uint32(d.chanCount))
 	}
 	// fallback: 用子协议 hash
-	if sp, ok := extractSubProto(hdr); ok {
-		return int(sp) % d.chanCount
+	if hdr != nil {
+		return int(hdr.SubProto()) % d.chanCount
 	}
 	return 0
 }

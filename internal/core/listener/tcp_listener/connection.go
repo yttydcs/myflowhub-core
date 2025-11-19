@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	core "MyFlowHub-Core/internal/core"
-	"MyFlowHub-Core/internal/core/header"
 )
 
 // tcpConnection 是针对 TCP 的 IConnection 实现。
@@ -63,7 +62,7 @@ func (c *tcpConnection) RemoteAddr() net.Addr { return c.conn.RemoteAddr() }
 func (c *tcpConnection) Reader() core.IReader     { c.mu.RLock(); defer c.mu.RUnlock(); return c.reader }
 func (c *tcpConnection) SetReader(r core.IReader) { c.mu.Lock(); c.reader = r; c.mu.Unlock() }
 
-func (c *tcpConnection) DispatchReceive(h header.IHeader, payload []byte) {
+func (c *tcpConnection) DispatchReceive(h core.IHeader, payload []byte) {
 	c.mu.RLock()
 	recv := c.recvH
 	c.mu.RUnlock()
@@ -79,7 +78,7 @@ func (c *tcpConnection) Send(data []byte) error {
 	return err
 }
 
-func (c *tcpConnection) SendWithHeader(hdr header.IHeader, payload []byte, codec core.IHeaderCodec) error {
+func (c *tcpConnection) SendWithHeader(hdr core.IHeader, payload []byte, codec core.IHeaderCodec) error {
 	if codec == nil {
 		return io.ErrNoProgress // 表示未提供 codec
 	}

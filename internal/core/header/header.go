@@ -3,38 +3,9 @@ package header
 import (
 	"encoding/binary"
 	"io"
+
+	core "MyFlowHub-Core/internal/core"
 )
-
-// IHeader 定义协议头的通用接口：提供当前 TCP 头部的全部只读访问方法，并提供修改方法（流式）。
-// 注意：具体实现需使用指针接收者实现修改方法，以便原地修改。
-type IHeader interface {
-	// 读取方法
-	Major() uint8
-	SubProto() uint8
-	SourceID() uint32
-	TargetID() uint32
-	GetFlags() uint8
-	GetMsgID() uint32
-	GetTimestamp() uint32
-	PayloadLength() uint32
-	GetReserved() uint16
-
-	// 修改方法（返回 IHeader 以支持链式调用）
-	WithMajor(uint8) IHeader
-	WithSubProto(uint8) IHeader
-	WithSourceID(uint32) IHeader
-	WithTargetID(uint32) IHeader
-	WithFlags(uint8) IHeader
-	WithMsgID(uint32) IHeader
-	WithTimestamp(uint32) IHeader
-	WithPayloadLength(uint32) IHeader
-	WithReserved(uint16) IHeader
-}
-
-// 头部字节序：所有多字节字段均使用网络字节序（大端）。
-// TypeFmt 的位定义（低位优先）：
-// - bit0..1：消息大类（00=OK_RESP，01=ERR_RESP，10=MSG，11=CMD）。
-// - bit2..7：子协议（交由不同 handler 处理）。
 
 // HeaderTcp 按方案A定义的 v1 头部，总长度 24 字节（由于 Source/Target 各 4 字节）：
 // TypeFmt[1]；Flags[1]；MsgID[4]；Source[4]；Target[4]；Timestamp[4]；PayloadLen[4]；Reserved[2]
@@ -87,24 +58,24 @@ func (h HeaderTcp) PayloadLength() uint32 { return h.PayloadLen }
 func (h HeaderTcp) GetReserved() uint16   { return h.Reserved }
 
 // WithMajor 设置消息大类（不会修改子协议位）。
-func (h *HeaderTcp) WithMajor(major uint8) IHeader {
+func (h *HeaderTcp) WithMajor(major uint8) core.IHeader {
 	h.TypeFmt = (h.TypeFmt &^ 0x03) | (major & 0x03)
 	return h
 }
 
 // WithSubProto 设置子协议（不会修改大类位）。
-func (h *HeaderTcp) WithSubProto(sub uint8) IHeader {
+func (h *HeaderTcp) WithSubProto(sub uint8) core.IHeader {
 	h.TypeFmt = (h.TypeFmt &^ 0xFC) | ((sub & 0x3F) << 2)
 	return h
 }
 
-func (h *HeaderTcp) WithSourceID(v uint32) IHeader      { h.Source = v; return h }
-func (h *HeaderTcp) WithTargetID(v uint32) IHeader      { h.Target = v; return h }
-func (h *HeaderTcp) WithFlags(v uint8) IHeader          { h.Flags = v; return h }
-func (h *HeaderTcp) WithMsgID(v uint32) IHeader         { h.MsgID = v; return h }
-func (h *HeaderTcp) WithTimestamp(v uint32) IHeader     { h.Timestamp = v; return h }
-func (h *HeaderTcp) WithPayloadLength(v uint32) IHeader { h.PayloadLen = v; return h }
-func (h *HeaderTcp) WithReserved(v uint16) IHeader      { h.Reserved = v; return h }
+func (h *HeaderTcp) WithSourceID(v uint32) core.IHeader      { h.Source = v; return h }
+func (h *HeaderTcp) WithTargetID(v uint32) core.IHeader      { h.Target = v; return h }
+func (h *HeaderTcp) WithFlags(v uint8) core.IHeader          { h.Flags = v; return h }
+func (h *HeaderTcp) WithMsgID(v uint32) core.IHeader         { h.MsgID = v; return h }
+func (h *HeaderTcp) WithTimestamp(v uint32) core.IHeader     { h.Timestamp = v; return h }
+func (h *HeaderTcp) WithPayloadLength(v uint32) core.IHeader { h.PayloadLen = v; return h }
+func (h *HeaderTcp) WithReserved(v uint16) core.IHeader      { h.Reserved = v; return h }
 
 // HeaderTcpCodec 提供 HeaderTcp 的编解码。
 type HeaderTcpCodec struct{}
@@ -112,7 +83,7 @@ type HeaderTcpCodec struct{}
 const headerTcpSize = 24
 
 // Encode 将 HeaderTcp 与 payload 编码为 [header || payload]。
-func (HeaderTcpCodec) Encode(header IHeader, payload []byte) ([]byte, error) {
+func (HeaderTcpCodec) Encode(header core.IHeader, payload []byte) ([]byte, error) {
 	var h HeaderTcp
 	if hp, ok := header.(*HeaderTcp); ok && hp != nil {
 		h = *hp
@@ -147,7 +118,7 @@ func (HeaderTcpCodec) Encode(header IHeader, payload []byte) ([]byte, error) {
 }
 
 // Decode 从 reader 解码出一帧：先读 24 字节头，再按 PayloadLen 读取负载。
-func (HeaderTcpCodec) Decode(r io.Reader) (IHeader, []byte, error) {
+func (HeaderTcpCodec) Decode(r io.Reader) (core.IHeader, []byte, error) {
 	hdr := make([]byte, headerTcpSize)
 	if _, err := io.ReadFull(r, hdr); err != nil {
 		return nil, nil, err

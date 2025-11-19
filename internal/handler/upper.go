@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	core "MyFlowHub-Core/internal/core"
-	"MyFlowHub-Core/internal/core/header"
 )
 
 // UpperHandler 大写转换子协议实现。
@@ -24,7 +23,8 @@ func NewUpperHandler(log *slog.Logger) *UpperHandler {
 
 func (h *UpperHandler) SubProto() uint8 { return SubProtoUpper }
 
-func (h *UpperHandler) OnReceive(ctx context.Context, conn core.IConnection, hdr header.IHeader, payload []byte) {
+func (h *UpperHandler) OnReceive(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) {
+	_ = ctx
 	tcp, ok := ToHeaderTcp(hdr)
 	if !ok {
 		h.log.Error("header 类型错误")

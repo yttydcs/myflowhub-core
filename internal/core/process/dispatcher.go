@@ -10,7 +10,6 @@ import (
 
 	core "MyFlowHub-Core/internal/core"
 	coreconfig "MyFlowHub-Core/internal/core/config"
-	"MyFlowHub-Core/internal/core/header"
 )
 
 // DispatchOptions 定义 DispatcherProcess 的运行参数。
@@ -26,7 +25,7 @@ type DispatchOptions struct {
 type dispatchEvent struct {
 	ctx     context.Context
 	conn    core.IConnection
-	hdr     header.IHeader
+	hdr     core.IHeader
 	payload []byte
 }
 
@@ -153,12 +152,12 @@ func (p *DispatcherProcess) ensureRuntime(ctx context.Context) {
 }
 
 type preRouteDecider interface {
-	PreRoute(ctx context.Context, conn core.IConnection, hdr header.IHeader, payload []byte) bool
+	PreRoute(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) bool
 }
 
 // preRouteDecider 可选接口：基础流程可实现以在子协议分发前决定是否继续。
 // 默认实现直接调用 OnReceive，子类可选择覆盖。
-func (p *DispatcherProcess) preRoute(ctx context.Context, conn core.IConnection, hdr header.IHeader, payload []byte) bool {
+func (p *DispatcherProcess) preRoute(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) bool {
 	if p.base == nil {
 		return true
 	}
@@ -169,7 +168,7 @@ func (p *DispatcherProcess) preRoute(ctx context.Context, conn core.IConnection,
 	return true
 }
 
-func (p *DispatcherProcess) selectHandler(hdr header.IHeader) (core.ISubProcess, uint8) {
+func (p *DispatcherProcess) selectHandler(hdr core.IHeader) (core.ISubProcess, uint8) {
 	sub, ok := extractSubProto(hdr)
 	if !ok {
 		return nil, 0
@@ -178,7 +177,7 @@ func (p *DispatcherProcess) selectHandler(hdr header.IHeader) (core.ISubProcess,
 	return h, sub
 }
 
-func (p *DispatcherProcess) callHandler(ctx context.Context, handler core.ISubProcess, conn core.IConnection, hdr header.IHeader, payload []byte) {
+func (p *DispatcherProcess) callHandler(ctx context.Context, handler core.ISubProcess, conn core.IConnection, hdr core.IHeader, payload []byte) {
 	if handler == nil {
 		return
 	}
@@ -204,7 +203,7 @@ func (p *DispatcherProcess) route(evt dispatchEvent) {
 	p.callHandler(evt.ctx, handler, evt.conn, evt.hdr, evt.payload)
 }
 
-func extractSubProto(h header.IHeader) (uint8, bool) {
+func extractSubProto(h core.IHeader) (uint8, bool) {
 	if h == nil {
 		return 0, false
 	}
@@ -238,7 +237,7 @@ func (p *DispatcherProcess) ConfigSnapshot() (channels, workers, buffer int) {
 	return
 }
 
-func (p *DispatcherProcess) selectQueue(conn core.IConnection, hdr header.IHeader) int {
+func (p *DispatcherProcess) selectQueue(conn core.IConnection, hdr core.IHeader) int {
 	return p.strategy.SelectQueue(conn, hdr, p.chanCount)
 }
 
@@ -250,7 +249,7 @@ func (p *DispatcherProcess) OnListen(conn core.IConnection) {
 }
 
 // OnReceive 将事件写入通道，供 worker 并发处理。
-func (p *DispatcherProcess) OnReceive(ctx context.Context, conn core.IConnection, hdr header.IHeader, payload []byte) {
+func (p *DispatcherProcess) OnReceive(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -270,7 +269,7 @@ func (p *DispatcherProcess) OnReceive(ctx context.Context, conn core.IConnection
 	}
 }
 
-func (p *DispatcherProcess) OnSend(ctx context.Context, conn core.IConnection, hdr header.IHeader, payload []byte) error {
+func (p *DispatcherProcess) OnSend(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) error {
 	if p.base != nil {
 		return p.base.OnSend(ctx, conn, hdr, payload)
 	}

@@ -14,8 +14,8 @@ const (
 	SubProtoUpper = 3 // 大写转换子协议（2 预留给登录）
 )
 
-// ToHeaderTcp 尝试将通用 header.IHeader 转换为 header.HeaderTcp。
-func ToHeaderTcp(h header.IHeader) (header.HeaderTcp, bool) {
+// ToHeaderTcp 尝试将通用 core.IHeader 转换为 header.HeaderTcp。
+func ToHeaderTcp(h core.IHeader) (header.HeaderTcp, bool) {
 	if v, ok := h.(*header.HeaderTcp); ok && v != nil {
 		return *v, true
 	}

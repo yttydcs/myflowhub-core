@@ -1,11 +1,36 @@
 package core
 
 import (
-	"MyFlowHub-Core/internal/core/header"
 	"context"
 	"io"
 	"net"
 )
+
+// IHeader 定义协议头的通用接口：提供当前 TCP 头部的全部只读访问方法，并提供修改方法（流式）。
+// 注意：具体实现需使用指针接收者实现修改方法，以便原地修改。
+type IHeader interface {
+	// 读取方法
+	Major() uint8
+	SubProto() uint8
+	SourceID() uint32
+	TargetID() uint32
+	GetFlags() uint8
+	GetMsgID() uint32
+	GetTimestamp() uint32
+	PayloadLength() uint32
+	GetReserved() uint16
+
+	// 修改方法（返回 IHeader 以支持链式调用）
+	WithMajor(uint8) IHeader
+	WithSubProto(uint8) IHeader
+	WithSourceID(uint32) IHeader
+	WithTargetID(uint32) IHeader
+	WithFlags(uint8) IHeader
+	WithMsgID(uint32) IHeader
+	WithTimestamp(uint32) IHeader
+	WithPayloadLength(uint32) IHeader
+	WithReserved(uint16) IHeader
+}
 
 // IConfig 配置接口：用于读取服务配置，由 IServer 的具体实现持有。
 // 尽量保持最小化约束，后续可以扩展。
@@ -32,7 +57,7 @@ type IServer interface {
 	// NodeID 返回当前节点 ID。
 	NodeID() uint32
 	// Send 将 header+payload 发送给指定连接，并触发处理钩子。
-	Send(ctx context.Context, connID string, hdr header.IHeader, payload []byte) error
+	Send(ctx context.Context, connID string, hdr IHeader, payload []byte) error
 }
 
 // IProcess 处理管线接口：Server 在连接建立/收发/关闭时调用。
@@ -40,9 +65,9 @@ type IProcess interface {
 	// OnListen 在连接成功加入管理器后触发，可用于初始化元数据。
 	OnListen(conn IConnection)
 	// OnReceive 在收到一帧数据后触发。
-	OnReceive(ctx context.Context, conn IConnection, hdr header.IHeader, payload []byte)
+	OnReceive(ctx context.Context, conn IConnection, hdr IHeader, payload []byte)
 	// OnSend 在发送一帧数据前触发，可用于审计/修改。
-	OnSend(ctx context.Context, conn IConnection, hdr header.IHeader, payload []byte) error
+	OnSend(ctx context.Context, conn IConnection, hdr IHeader, payload []byte) error
 	// OnClose 在连接移除/关闭后触发。
 	OnClose(conn IConnection)
 }
@@ -52,26 +77,26 @@ type ISubProcess interface {
 	// SubProto 返回该 handler 负责的子协议编号（0-63）。
 	SubProto() uint8
 	// OnReceive 处理指定子协议的数据帧。
-	OnReceive(ctx context.Context, conn IConnection, hdr header.IHeader, payload []byte)
+	OnReceive(ctx context.Context, conn IConnection, hdr IHeader, payload []byte)
 }
 
 // IHeaderCodec 头编解码接口：不同协议实现各自的头部序列化与反序列化。
 type IHeaderCodec interface {
 	// Encode 将 header 与 payload 编码为单个帧字节切片。
-	Encode(header header.IHeader, payload []byte) ([]byte, error)
+	Encode(header IHeader, payload []byte) ([]byte, error)
 	// Decode 从流中解码出一帧，返回头与负载；可能阻塞直到读到完整帧。
-	Decode(r io.Reader) (header.IHeader, []byte, error)
+	Decode(r io.Reader) (IHeader, []byte, error)
 }
 
 // ReceiveHandler 接收事件回调：当连接收到一帧数据时触发。
-type ReceiveHandler func(conn IConnection, header header.IHeader, payload []byte)
+type ReceiveHandler func(conn IConnection, header IHeader, payload []byte)
 
 // ISender 发送者接口：抽象发送能力，可被连接或其他组件复用。
 type ISender interface {
 	// Send 发送原始字节（按具体协议决定是否已编码为完整帧）。
 	Send(data []byte) error
 	// SendWithHeader 使用 Header 与 HeaderCodec 进行编码后发送（可选实现）。
-	SendWithHeader(header header.IHeader, payload []byte, codec IHeaderCodec) error
+	SendWithHeader(header IHeader, payload []byte, codec IHeaderCodec) error
 }
 
 // IConnection 连接接口：封装实际连接与其元数据，支持发送、接收事件、关闭与元数据的读写。
@@ -98,7 +123,7 @@ type IConnection interface {
 	// SetReader 绑定读取器，Server 在启动读循环前调用。
 	SetReader(IReader)
 	// DispatchReceive 由 Reader 调用，用于触发接收事件。
-	DispatchReceive(header.IHeader, []byte)
+	DispatchReceive(IHeader, []byte)
 	// RawConn 返回底层 net.Conn，供 Reader 读取。
 	RawConn() net.Conn
 }
@@ -147,5 +172,5 @@ type IReader interface {
 	ReadLoop(ctx context.Context, conn IConnection, hc IHeaderCodec) error
 }
 
-// 移除 IRoutingHeader，统一使用 header.IHeader 作为通用头接口。
-// 任何协议头实现 header.IHeader 后，即可被路由、分发与编码器统一处理。
+// 移除 IRoutingHeader，统一使用 IHeader 作为通用头接口。
+// 任何协议头实现 IHeader 后，即可被路由、分发与编码器统一处理。

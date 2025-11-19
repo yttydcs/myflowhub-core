@@ -84,10 +84,10 @@ type spyBaseProcess struct {
 }
 
 func (s *spyBaseProcess) OnListen(core.IConnection) { s.listens.Add(1) }
-func (s *spyBaseProcess) OnReceive(context.Context, core.IConnection, header.IHeader, []byte) {
+func (s *spyBaseProcess) OnReceive(context.Context, core.IConnection, core.IHeader, []byte) {
 	s.receives.Add(1)
 }
-func (s *spyBaseProcess) OnSend(context.Context, core.IConnection, header.IHeader, []byte) error {
+func (s *spyBaseProcess) OnSend(context.Context, core.IConnection, core.IHeader, []byte) error {
 	s.sends.Add(1)
 	return nil
 }
@@ -99,7 +99,7 @@ type recordHandler struct {
 }
 
 func (h *recordHandler) SubProto() uint8 { return h.sub }
-func (h *recordHandler) OnReceive(ctx context.Context, conn core.IConnection, _ header.IHeader, payload []byte) {
+func (h *recordHandler) OnReceive(ctx context.Context, conn core.IConnection, _ core.IHeader, payload []byte) {
 	h.ch <- fmt.Sprintf("%s|%s", conn.ID(), string(payload))
 }
 

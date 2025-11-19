@@ -5,7 +5,6 @@ import (
 	"log/slog"
 
 	core "MyFlowHub-Core/internal/core"
-	"MyFlowHub-Core/internal/core/header"
 )
 
 // SimpleProcess 是一个示例实现：仅记录事件。
@@ -24,11 +23,11 @@ func (p *SimpleProcess) OnListen(conn core.IConnection) {
 	p.logger.Info("connection listen", "id", conn.ID(), "remote", conn.RemoteAddr())
 }
 
-func (p *SimpleProcess) OnReceive(ctx context.Context, conn core.IConnection, hdr header.IHeader, payload []byte) {
+func (p *SimpleProcess) OnReceive(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) {
 	p.logger.Info("recv", "id", conn.ID(), "bytes", len(payload))
 }
 
-func (p *SimpleProcess) OnSend(ctx context.Context, conn core.IConnection, hdr header.IHeader, payload []byte) error {
+func (p *SimpleProcess) OnSend(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) error {
 	p.logger.Debug("send", "id", conn.ID(), "bytes", len(payload))
 	return nil
 }
