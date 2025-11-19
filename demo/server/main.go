@@ -36,6 +36,11 @@ func main() {
 	initLoggerFromEnv()
 
 	addr := getenv("DEMO_ADDR", ":9000")
+	// 可选的发送通道配置环境变量
+	sendCh := getenv("SEND_CHANNEL_COUNT", "1")
+	sendW := getenv("SEND_WORKERS_PER_CHANNEL", "1")
+	sendBuf := getenv("SEND_CHANNEL_BUFFER", "64")
+
 	slog.Info("服务端启动", "listen", addr)
 
 	procChannels := getenvInt("DEMO_PROC_CHANNELS", 2)
@@ -47,6 +52,10 @@ func main() {
 		config.KeyProcChannelCount:   strconv.Itoa(procChannels),
 		config.KeyProcWorkersPerChan: strconv.Itoa(procWorkers),
 		config.KeyProcChannelBuffer:  strconv.Itoa(procBuffer),
+		// 发送配置
+		config.KeySendChannelCount:   sendCh,
+		config.KeySendWorkersPerChan: sendW,
+		config.KeySendChannelBuffer:  sendBuf,
 	})
 
 	// 创建连接管理器
@@ -59,6 +68,10 @@ func main() {
 	}
 	ch, workers, buf := dispatcher.ConfigSnapshot()
 	slog.Info("Process pipeline ready", "channels", ch, "workers_per_channel", workers, "channel_buffer", buf)
+
+	// 发送调度器快照由 server 初始化后打印
+	// 注意：这里为演示直接根据配置打印预期值
+	slog.Info("Send pipeline config", "channels", sendCh, "workers_per_channel", sendW, "channel_buffer", sendBuf)
 
 	// 创建 TCP 监听器
 	listener := tcp_listener.New(addr, tcp_listener.Options{
