@@ -17,6 +17,9 @@ const (
 	KeySendChannelBuffer    = "send.channel_buffer"
 	KeyRoutingForwardRemote = "routing.forward_remote"
 	KeyProcQueueStrategy    = "process.queue_strategy" // conn|subproto|source_target|roundrobin
+	KeyDefaultForwardEnable = "routing.default_forward_enable"
+	KeyDefaultForwardTarget = "routing.default_forward_target"
+	KeyDefaultForwardMap    = "routing.default_forward_map"
 )
 
 // NewMap 使用传入 map 构建 MapConfig；若 data 为空则初始化为空 map。
@@ -33,6 +36,9 @@ func NewMap(data map[string]string) *MapConfig {
 	ensureDefault(mc.data, KeySendChannelBuffer, "64")
 	ensureDefault(mc.data, KeyRoutingForwardRemote, "true")
 	ensureDefault(mc.data, KeyProcQueueStrategy, "conn")
+	ensureDefault(mc.data, KeyDefaultForwardEnable, "false")
+	ensureDefault(mc.data, KeyDefaultForwardTarget, "")
+	ensureDefault(mc.data, KeyDefaultForwardMap, "")
 	return mc
 }
 

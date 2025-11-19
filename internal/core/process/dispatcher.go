@@ -34,6 +34,7 @@ type DispatcherProcess struct {
 	log      *slog.Logger
 	base     core.IProcess
 	handlers map[uint8]core.ISubProcess
+	fallback core.ISubProcess
 
 	queues         []chan dispatchEvent
 	chanCount      int
@@ -118,6 +119,16 @@ func (p *DispatcherProcess) RegisterHandler(h core.ISubProcess) error {
 	return nil
 }
 
+// RegisterDefaultHandler 注册默认子协议处理器。
+func (p *DispatcherProcess) RegisterDefaultHandler(h core.ISubProcess) {
+	if h == nil {
+		return
+	}
+	p.mu.Lock()
+	p.fallback = h
+	p.mu.Unlock()
+}
+
 // ensureRuntime 启动 worker 池。
 func (p *DispatcherProcess) ensureRuntime(ctx context.Context) {
 	p.startOnce.Do(func() {
@@ -171,9 +182,12 @@ func (p *DispatcherProcess) preRoute(ctx context.Context, conn core.IConnection,
 func (p *DispatcherProcess) selectHandler(hdr core.IHeader) (core.ISubProcess, uint8) {
 	sub, ok := extractSubProto(hdr)
 	if !ok {
-		return nil, 0
+		return p.getFallback(), 0
 	}
 	h := p.getHandler(sub)
+	if h == nil {
+		return p.getFallback(), sub
+	}
 	return h, sub
 }
 
@@ -215,6 +229,13 @@ func (p *DispatcherProcess) getHandler(sub uint8) core.ISubProcess {
 	h := p.handlers[sub]
 	p.mu.RUnlock()
 	return h
+}
+
+func (p *DispatcherProcess) getFallback() core.ISubProcess {
+	p.mu.RLock()
+	fb := p.fallback
+	p.mu.RUnlock()
+	return fb
 }
 
 // Shutdown 关闭 worker 池。

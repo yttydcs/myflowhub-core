@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 
 	core "MyFlowHub-Core/internal/core"
@@ -16,6 +17,25 @@ const (
 // CloneRequest 封装请求头部的克隆操作。
 func CloneRequest(h core.IHeader) *header.HeaderTcp {
 	return header.CloneToTCP(h)
+}
+
+// CloneWithTarget 克隆头部并重写目标节点。
+func CloneWithTarget(h core.IHeader, target uint32) *header.HeaderTcp {
+	clone := header.CloneToTCP(h)
+	if clone != nil {
+		clone.WithTargetID(target)
+	}
+	return clone
+}
+
+func extractServer(ctx context.Context) core.IServer {
+	if ctx == nil {
+		return nil
+	}
+	if srv, ok := ctx.Value(struct{ S string }{"server"}).(core.IServer); ok {
+		return srv
+	}
+	return nil
 }
 
 // BuildResponse 根据请求头构建响应头，并指定子协议与载荷长度。
