@@ -69,13 +69,15 @@ func (p *PreRoutingProcess) OnReceive(ctx context.Context, conn core.IConnection
 	// 广播
 	if target == 0 {
 		p.log.Info("广播消息", "from", hdr.SourceID(), "subproto", hdr.SubProto())
+		baseHdr := hdr.Clone()
 		srv.ConnManager().Range(func(c core.IConnection) bool {
 			if c.ID() != conn.ID() {
 				if !p.forwardMode {
 					return true
 				}
+				clone := baseHdr.Clone()
 				p.forwardOrDrop(func() error {
-					return c.SendWithHeader(hdr, payload, srv.HeaderCodec())
+					return c.SendWithHeader(clone, payload, srv.HeaderCodec())
 				})
 			}
 			return true
@@ -89,9 +91,10 @@ func (p *PreRoutingProcess) OnReceive(ctx context.Context, conn core.IConnection
 			return
 		}
 		p.log.Info("转发消息", "from", hdr.SourceID(), "to", target, "subproto", hdr.SubProto())
+		forwardHdr := hdr.Clone()
 		if targetConn, ok := srv.ConnManager().GetByNode(target); ok {
 			p.forwardOrDrop(func() error {
-				return targetConn.SendWithHeader(hdr, payload, srv.HeaderCodec())
+				return targetConn.SendWithHeader(forwardHdr.Clone(), payload, srv.HeaderCodec())
 			})
 			return
 		}
@@ -100,8 +103,9 @@ func (p *PreRoutingProcess) OnReceive(ctx context.Context, conn core.IConnection
 		srv.ConnManager().Range(func(c core.IConnection) bool {
 			if meta, ok := c.GetMeta("nodeID"); ok {
 				if nid, ok2 := meta.(uint32); ok2 && nid == target {
+					sendHdr := forwardHdr.Clone()
 					p.forwardOrDrop(func() error {
-						return c.SendWithHeader(hdr, payload, srv.HeaderCodec())
+						return c.SendWithHeader(sendHdr, payload, srv.HeaderCodec())
 					})
 					forwarded = true
 					return false

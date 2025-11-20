@@ -78,6 +78,14 @@ func (h *HeaderTcp) WithTimestamp(v uint32) core.IHeader     { h.Timestamp = v; 
 func (h *HeaderTcp) WithPayloadLength(v uint32) core.IHeader { h.PayloadLen = v; return h }
 func (h *HeaderTcp) WithReserved(v uint16) core.IHeader      { h.Reserved = v; return h }
 
+func (h *HeaderTcp) Clone() core.IHeader {
+	if h == nil {
+		return &HeaderTcp{}
+	}
+	clone := *h
+	return &clone
+}
+
 // HeaderTcpCodec 提供 HeaderTcp 的编解码。
 type HeaderTcpCodec struct{}
 

@@ -30,6 +30,8 @@ type IHeader interface {
 	WithTimestamp(uint32) IHeader
 	WithPayloadLength(uint32) IHeader
 	WithReserved(uint16) IHeader
+	// Clone 返回该头部的深拷贝，实现需确保可在多协程安全复用。
+	Clone() IHeader
 }
 
 // IConfig 配置接口：用于读取服务配置，由 IServer 的具体实现持有。
