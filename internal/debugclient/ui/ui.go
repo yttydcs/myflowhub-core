@@ -30,7 +30,7 @@ type Controller struct {
 
 	addrEntry *widget.Entry
 	payload   *widget.Entry
-	logView   *widget.Entry
+	logView   *logEntry
 	form      *headerForm
 
 	nodeEntry *widget.Entry
@@ -129,7 +129,6 @@ func (c *Controller) appendLog(format string, args ...any) {
 	c.logBuf.WriteString(fmt.Sprintf(format, args...))
 	c.logBuf.WriteString("\n")
 	text := c.logBuf.String()
-	fyne.CurrentApp().SendNotification(nil)
 	if c.logView != nil {
 		c.logView.SetText(text)
 		c.logView.CursorRow = strings.Count(text, "\n")
@@ -150,8 +149,7 @@ func (c *Controller) buildPayloadCard() fyne.CanvasObject {
 }
 
 func (c *Controller) buildLogCard() fyne.CanvasObject {
-	c.logView = widget.NewMultiLineEntry()
-	c.logView.Disable()
+	c.logView = newLogEntry()
 	return widget.NewCard("日志", "", c.logView)
 }
 
@@ -321,4 +319,34 @@ func ternarySuffix(cond bool) string {
 		return " (截断)"
 	}
 	return ""
+}
+
+type logEntry struct {
+	widget.Entry
+}
+
+func newLogEntry() *logEntry {
+	e := &logEntry{}
+	e.MultiLine = true
+	e.Wrapping = fyne.TextWrapWord
+	e.ExtendBaseWidget(e)
+	return e
+}
+
+func (e *logEntry) TypedRune(r rune) {}
+
+func (e *logEntry) TypedKey(event *fyne.KeyEvent) {
+	switch event.Name {
+	case fyne.KeyLeft, fyne.KeyRight, fyne.KeyUp, fyne.KeyDown,
+		fyne.KeyHome, fyne.KeyEnd, fyne.KeyPageUp, fyne.KeyPageDown:
+		e.Entry.TypedKey(event)
+	}
+}
+
+func (e *logEntry) TypedShortcut(shortcut fyne.Shortcut) {
+	switch shortcut.(type) {
+	case *fyne.ShortcutCopy, *fyne.ShortcutSelectAll, *fyne.ShortcutPaste:
+		// 允许复制/全选/粘贴（粘贴只改变剪贴板，不写入本区域）。
+		e.Entry.TypedShortcut(shortcut)
+	}
 }
