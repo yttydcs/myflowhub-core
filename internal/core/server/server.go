@@ -104,11 +104,10 @@ func (s *Server) Start(ctx context.Context) error {
 		return errors.New("server already started")
 	}
 	s.ctx, s.cancel = context.WithCancel(ctx)
-	// 使用匿名 key 避免额外依赖
-	s.ctx = context.WithValue(s.ctx, struct{ S string }{"server"}, s)
+	s.ctx = core.WithServerContext(s.ctx, s)
 	onAdd := func(c core.IConnection) {
 		c.OnReceive(func(c core.IConnection, hdr core.IHeader, payload []byte) {
-			ctx2 := context.WithValue(ctx, struct{ S string }{"server"}, s)
+			ctx2 := core.WithServerContext(ctx, s)
 			s.proc.OnReceive(ctx2, c, hdr, payload)
 		})
 		s.proc.OnListen(c)

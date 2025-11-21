@@ -2,7 +2,9 @@ package reader
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"sync"
 
 	core "MyFlowHub-Core/internal/core"
 )
@@ -21,9 +23,20 @@ func NewTCP(logger *slog.Logger) *TCPReader {
 
 func (r *TCPReader) ReadLoop(ctx context.Context, conn core.IConnection, codec core.IHeaderCodec) error {
 	raw := conn.RawConn()
+	if raw == nil {
+		return errors.New("nil raw conn")
+	}
+	var closeOnce sync.Once
+	go func() {
+		select {
+		case <-ctx.Done():
+			closeOnce.Do(func() { _ = raw.Close() })
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
+			closeOnce.Do(func() { _ = raw.Close() })
 			return ctx.Err()
 		default:
 		}

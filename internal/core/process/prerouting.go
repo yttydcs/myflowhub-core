@@ -53,7 +53,7 @@ func (p *PreRoutingProcess) OnClose(conn core.IConnection) {
 }
 
 func (p *PreRoutingProcess) OnReceive(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) {
-	srv := extractServer(ctx)
+	srv := core.ServerFromContext(ctx)
 	if srv == nil {
 		p.log.Warn("无法获取 server 上下文，跳过路由")
 		return
@@ -130,11 +130,5 @@ func (p *PreRoutingProcess) forwardOrDrop(sendFn func() error) {
 }
 
 func extractServer(ctx context.Context) core.IServer {
-	if ctx == nil {
-		return nil
-	}
-	if srv, ok := ctx.Value(struct{ S string }{"server"}).(core.IServer); ok {
-		return srv
-	}
-	return nil
+	return core.ServerFromContext(ctx)
 }

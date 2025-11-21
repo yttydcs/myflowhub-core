@@ -27,16 +27,6 @@ func CloneWithTarget(h core.IHeader, target uint32) *header.HeaderTcp {
 	return clone
 }
 
-func extractServer(ctx context.Context) core.IServer {
-	if ctx == nil {
-		return nil
-	}
-	if srv, ok := ctx.Value(struct{ S string }{"server"}).(core.IServer); ok {
-		return srv
-	}
-	return nil
-}
-
 // BuildResponse 根据请求头构建响应头，并指定子协议与载荷长度。
 func BuildResponse(req core.IHeader, payloadLen uint32, sub uint8) core.IHeader {
 	return header.BuildTCPResponse(req, payloadLen, sub)
@@ -46,7 +36,7 @@ func BuildResponse(req core.IHeader, payloadLen uint32, sub uint8) core.IHeader 
 func SendResponse(ctx context.Context, log *slog.Logger, conn core.IConnection, req core.IHeader, payload []byte, sub uint8) {
 	codec := header.HeaderTcpCodec{}
 	resp := BuildResponse(req, uint32(len(payload)), sub)
-	if srv := extractServer(ctx); srv != nil {
+	if srv := core.ServerFromContext(ctx); srv != nil {
 		if err := srv.Send(ctx, conn.ID(), resp, payload); err != nil && log != nil {
 			log.Error("发送响应失败", "err", err)
 		}

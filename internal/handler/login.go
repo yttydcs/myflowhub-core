@@ -29,7 +29,7 @@ func (h *LoginHandler) SubProto() uint8 { return 2 }
 func (h *LoginHandler) OnReceive(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) {
 	id := globalNodeID.Add(1) - 1
 	conn.SetMeta("nodeID", id)
-	if srv := extractServer(ctx); srv != nil {
+	if srv := core.ServerFromContext(ctx); srv != nil {
 		if cm, ok := srv.ConnManager().(interface {
 			UpdateNodeIndex(uint32, core.IConnection)
 		}); ok {

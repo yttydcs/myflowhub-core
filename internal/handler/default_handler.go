@@ -73,7 +73,7 @@ func (h *DefaultForwardHandler) OnReceive(ctx context.Context, conn core.IConnec
 		h.log.Debug("no default route for subproto", "subproto", hdr.SubProto())
 		return
 	}
-	srv := extractServer(ctx)
+	srv := core.ServerFromContext(ctx)
 	if srv == nil {
 		h.log.Warn("no server context, cannot forward", "conn", conn.ID())
 		return
