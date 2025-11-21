@@ -13,8 +13,7 @@ import (
 // 1. target==0 => 广播（当前实现不回发给源连接，可调整）。
 // 2. target!=local => 转发（直接写到目标连接，不进入子协议 handler）。
 // 3. target==local => 继续 dispatcher 后续子协议处理。
-// 依赖：连接元数据中存在 nodeID（由登录协议写入）。
-
+// 依赖：连接元数据中存储 nodeID（由登录协议写入）。
 type PreRoutingProcess struct {
 	log         *slog.Logger
 	cfg         core.IConfig
@@ -77,7 +76,7 @@ func (p *PreRoutingProcess) OnReceive(ctx context.Context, conn core.IConnection
 				}
 				clone := baseHdr.Clone()
 				p.forwardOrDrop(func() error {
-					return c.SendWithHeader(clone, payload, srv.HeaderCodec())
+					return srv.Send(ctx, c.ID(), clone, payload)
 				})
 			}
 			return true
@@ -94,7 +93,7 @@ func (p *PreRoutingProcess) OnReceive(ctx context.Context, conn core.IConnection
 		forwardHdr := hdr.Clone()
 		if targetConn, ok := srv.ConnManager().GetByNode(target); ok {
 			p.forwardOrDrop(func() error {
-				return targetConn.SendWithHeader(forwardHdr.Clone(), payload, srv.HeaderCodec())
+				return srv.Send(ctx, targetConn.ID(), forwardHdr.Clone(), payload)
 			})
 			return
 		}
@@ -105,7 +104,7 @@ func (p *PreRoutingProcess) OnReceive(ctx context.Context, conn core.IConnection
 				if nid, ok2 := meta.(uint32); ok2 && nid == target {
 					sendHdr := forwardHdr.Clone()
 					p.forwardOrDrop(func() error {
-						return c.SendWithHeader(sendHdr, payload, srv.HeaderCodec())
+						return srv.Send(ctx, c.ID(), sendHdr, payload)
 					})
 					forwarded = true
 					return false

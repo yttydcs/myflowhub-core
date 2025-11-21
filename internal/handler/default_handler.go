@@ -97,7 +97,7 @@ func (h *DefaultForwardHandler) resolveTarget(sub uint8) uint32 {
 func (h *DefaultForwardHandler) forwardToNode(ctx context.Context, srv core.IServer, hdr core.IHeader, payload []byte) {
 	cm := srv.ConnManager()
 	if conn, ok := cm.GetByNode(hdr.TargetID()); ok {
-		if err := conn.SendWithHeader(hdr, payload, srv.HeaderCodec()); err != nil {
+		if err := srv.Send(ctx, conn.ID(), hdr, payload); err != nil {
 			h.log.Error("default forward failed", "err", err, "target", hdr.TargetID())
 		}
 		return
@@ -108,7 +108,7 @@ func (h *DefaultForwardHandler) forwardToNode(ctx context.Context, srv core.ISer
 		if nodeID, ok := conn.GetMeta("nodeID"); ok {
 			if nid, ok2 := nodeID.(uint32); ok2 && nid == hdr.TargetID() {
 				forwarded = true
-				if err := conn.SendWithHeader(hdr, payload, srv.HeaderCodec()); err != nil {
+				if err := srv.Send(ctx, conn.ID(), hdr, payload); err != nil {
 					h.log.Error("default forward failed", "err", err, "target", hdr.TargetID())
 				}
 				return false

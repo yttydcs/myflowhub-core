@@ -2,22 +2,39 @@ package process
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"net"
+	"strconv"
 	"sync"
+	"time"
 
 	core "MyFlowHub-Core/internal/core"
 	coreconfig "MyFlowHub-Core/internal/core/config"
+	"MyFlowHub-Core/internal/core/header"
 )
 
-// SendOptions 定义发送调度参数。
+var (
+	errNilConn          = errors.New("nil connection")
+	errNilCodec         = errors.New("nil codec")
+	errNilRawConn       = errors.New("nil raw conn")
+	errWriterClosed     = errors.New("writer closed")
+	errEnqueueTimeout   = errors.New("enqueue timeout")
+	errDispatcherClosed = errors.New("dispatcher closed")
+)
+
+// SendOptions configures the send dispatcher.
 type SendOptions struct {
 	Logger         *slog.Logger
 	ChannelCount   int
 	WorkersPerChan int
 	ChannelBuffer  int
+	ConnBuffer     int           // per-connection send queue length
+	EnqueueTimeout time.Duration // enqueue timeout for both shard and per-conn queues
+	EncodeInWriter bool          // encode in per-connection writer goroutine (strategy B)
 }
 
 type sendTask struct {
@@ -29,17 +46,106 @@ type sendTask struct {
 	cb      func(error)
 }
 
-// SendDispatcher 将发送请求放入按连接/子协议哈希的通道，由多个 worker 并发执行。
+type connWriter struct {
+	conn           core.IConnection
+	ch             chan sendTask
+	log            *slog.Logger
+	encodeInWriter bool
+	enqueueTimeout time.Duration
+
+	closeOnce sync.Once
+	closed    bool
+	mu        sync.RWMutex
+	wg        sync.WaitGroup
+}
+
+func (w *connWriter) start() {
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		for task := range w.ch {
+			err := w.write(task)
+			if task.cb != nil {
+				task.cb(err)
+			}
+		}
+	}()
+}
+
+func (w *connWriter) write(task sendTask) error {
+	if task.codec == nil {
+		return errNilCodec
+	}
+	raw := w.conn.RawConn()
+	if raw == nil {
+		return errNilRawConn
+	}
+
+	if w.encodeInWriter {
+		return writeFrame(raw, task.codec, task.hdr, task.payload)
+	}
+	// payload assumed encoded already
+	_, err := raw.Write(task.payload)
+	return err
+}
+
+func (w *connWriter) enqueue(task sendTask) (err error) {
+	w.mu.RLock()
+	closed := w.closed
+	w.mu.RUnlock()
+	if closed {
+		return errWriterClosed
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			w.mu.Lock()
+			w.closed = true
+			w.mu.Unlock()
+			err = errWriterClosed
+		}
+	}()
+	if w.enqueueTimeout <= 0 {
+		w.ch <- task
+		return nil
+	}
+	timer := time.NewTimer(w.enqueueTimeout)
+	defer timer.Stop()
+	select {
+	case w.ch <- task:
+		return nil
+	case <-timer.C:
+		return errEnqueueTimeout
+	}
+}
+
+func (w *connWriter) stop() {
+	w.closeOnce.Do(func() {
+		w.mu.Lock()
+		w.closed = true
+		close(w.ch)
+		w.mu.Unlock()
+	})
+	w.wg.Wait()
+}
+
+// SendDispatcher fan-outs send requests to per-connection serial writers.
 type SendDispatcher struct {
 	log            *slog.Logger
-	queues         []chan sendTask
-	chanCount      int
+	shards         []chan sendTask
+	shardCount     int
 	workersPerChan int
-	wg             sync.WaitGroup
-	startOnce      sync.Once
-	shutdownOnce   sync.Once
-	ctx            context.Context
-	cancel         context.CancelFunc
+	connBuffer     int
+	enqueueTimeout time.Duration
+	encodeInWriter bool
+
+	startOnce    sync.Once
+	shutdownOnce sync.Once
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+
+	mu      sync.RWMutex
+	writers map[string]*connWriter
 }
 
 func NewSendDispatcher(opts SendOptions) (*SendDispatcher, error) {
@@ -52,28 +158,44 @@ func NewSendDispatcher(opts SendOptions) (*SendDispatcher, error) {
 	if opts.ChannelBuffer < 0 {
 		opts.ChannelBuffer = 0
 	}
+	if opts.ConnBuffer <= 0 {
+		opts.ConnBuffer = 64
+	}
+	if opts.EnqueueTimeout < 0 {
+		opts.EnqueueTimeout = 0
+	}
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	queues := make([]chan sendTask, opts.ChannelCount)
-	for i := range queues {
-		queues[i] = make(chan sendTask, opts.ChannelBuffer)
+	if !opts.EncodeInWriter {
+		opts.EncodeInWriter = true
+	}
+	shards := make([]chan sendTask, opts.ChannelCount)
+	for i := range shards {
+		shards[i] = make(chan sendTask, opts.ChannelBuffer)
 	}
 	return &SendDispatcher{
 		log:            opts.Logger,
-		queues:         queues,
-		chanCount:      opts.ChannelCount,
+		shards:         shards,
+		shardCount:     opts.ChannelCount,
 		workersPerChan: opts.WorkersPerChan,
+		connBuffer:     opts.ConnBuffer,
+		enqueueTimeout: opts.EnqueueTimeout,
+		encodeInWriter: opts.EncodeInWriter,
+		writers:        make(map[string]*connWriter),
 	}, nil
 }
 
-// NewSendDispatcherFromConfig 从配置构建。
+// NewSendDispatcherFromConfig builds a dispatcher from config values.
 func NewSendDispatcherFromConfig(cfg core.IConfig, logger *slog.Logger) (*SendDispatcher, error) {
 	opts := SendOptions{
 		Logger:         logger,
 		ChannelCount:   readPositiveInt(cfg, coreconfig.KeySendChannelCount, 1),
 		WorkersPerChan: readPositiveInt(cfg, coreconfig.KeySendWorkersPerChan, 1),
 		ChannelBuffer:  readPositiveInt(cfg, coreconfig.KeySendChannelBuffer, 64),
+		ConnBuffer:     readPositiveInt(cfg, coreconfig.KeySendConnBuffer, 64),
+		EnqueueTimeout: readDurationMs(cfg, coreconfig.KeySendEnqueueTimeoutMS, 100),
+		EncodeInWriter: true,
 	}
 	return NewSendDispatcher(opts)
 }
@@ -84,76 +206,132 @@ func (d *SendDispatcher) ensureStarted(ctx context.Context) {
 			ctx = context.Background()
 		}
 		d.ctx, d.cancel = context.WithCancel(ctx)
-		for i := range d.queues {
-			q := d.queues[i]
+		for i := range d.shards {
+			q := d.shards[i]
 			d.wg.Add(1)
 			go func(ch <-chan sendTask) {
 				defer d.wg.Done()
 				for task := range ch {
-					// 调用发送
 					if task.conn == nil {
 						d.log.Warn("nil conn in send task")
 						continue
 					}
-					var err error
-					if task.codec != nil {
-						err = task.conn.SendWithHeader(task.hdr, task.payload, task.codec)
-					} else {
-						// 假设 payload 已编码
-						err = task.conn.Send(task.payload)
+					writer := d.getOrCreateWriter(task.conn)
+					if writer == nil {
+						if task.cb != nil {
+							task.cb(errWriterClosed)
+						}
+						continue
 					}
-					if task.cb != nil {
+					err := writer.enqueue(task)
+					if err != nil && task.cb != nil {
 						task.cb(err)
 					}
 				}
 			}(q)
 		}
-		// 关闭监控
 		go func() {
 			<-d.ctx.Done()
-			for _, q := range d.queues {
+			for _, q := range d.shards {
 				close(q)
 			}
+			d.mu.Lock()
+			for _, w := range d.writers {
+				w.stop()
+			}
+			d.writers = make(map[string]*connWriter)
+			d.mu.Unlock()
 		}()
 	})
 }
 
-// Dispatch 发送任务。
+// Dispatch queues a send task.
 func (d *SendDispatcher) Dispatch(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte, codec core.IHeaderCodec, cb func(error)) error {
 	if conn == nil {
-		return errors.New("nil connection")
+		return errNilConn
 	}
 	d.ensureStarted(ctx)
 	idx := d.selectQueue(conn, hdr)
 	task := sendTask{ctx: ctx, conn: conn, hdr: hdr, payload: payload, codec: codec, cb: cb}
+	if d.enqueueTimeout <= 0 {
+		select {
+		case d.shards[idx] <- task:
+			return nil
+		case <-d.ctx.Done():
+			return errDispatcherClosed
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	timer := time.NewTimer(d.enqueueTimeout)
+	defer timer.Stop()
 	select {
-	case d.queues[idx] <- task:
+	case d.shards[idx] <- task:
 		return nil
+	case <-timer.C:
+		return errEnqueueTimeout
+	case <-d.ctx.Done():
+		return errDispatcherClosed
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-d.ctx.Done():
-		return errors.New("dispatcher closed")
 	}
 }
 
 func (d *SendDispatcher) selectQueue(conn core.IConnection, hdr core.IHeader) int {
-	if d.chanCount == 1 {
+	if d.shardCount == 1 {
 		return 0
 	}
-	// 优先以连接 ID hash 保证同连接的顺序性（在每个 queue 内保持 FIFO）
 	if conn != nil {
 		h := fnv.New32a()
 		_, _ = h.Write([]byte(conn.ID()))
-		return int(h.Sum32() % uint32(d.chanCount))
+		return int(h.Sum32() % uint32(d.shardCount))
 	}
-	// fallback: 用子协议 hash
 	if hdr != nil {
-		return int(hdr.SubProto()) % d.chanCount
+		return int(hdr.SubProto()) % d.shardCount
 	}
 	return 0
 }
 
-// Shutdown 关闭发送调度器。
+func (d *SendDispatcher) getOrCreateWriter(conn core.IConnection) *connWriter {
+	id := conn.ID()
+	d.mu.RLock()
+	if w, ok := d.writers[id]; ok {
+		d.mu.RUnlock()
+		return w
+	}
+	d.mu.RUnlock()
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if w, ok := d.writers[id]; ok {
+		return w
+	}
+	w := &connWriter{
+		conn:           conn,
+		ch:             make(chan sendTask, d.connBuffer),
+		log:            d.log,
+		encodeInWriter: d.encodeInWriter,
+		enqueueTimeout: d.enqueueTimeout,
+	}
+	w.start()
+	d.writers[id] = w
+	return w
+}
+
+// CloseConn stops and removes the writer for a connection.
+func (d *SendDispatcher) CloseConn(connID string) {
+	d.mu.Lock()
+	w, ok := d.writers[connID]
+	if ok {
+		delete(d.writers, connID)
+	}
+	d.mu.Unlock()
+	if ok {
+		w.stop()
+	}
+}
+
+// Shutdown stops the dispatcher and waits for workers to exit.
 func (d *SendDispatcher) Shutdown() {
 	d.shutdownOnce.Do(func() {
 		if d.cancel != nil {
@@ -164,16 +342,69 @@ func (d *SendDispatcher) Shutdown() {
 }
 
 func (d *SendDispatcher) Snapshot() (channels, workers, buffer int) {
-	channels = len(d.queues)
+	channels = len(d.shards)
 	workers = d.workersPerChan
 	if channels > 0 {
-		buffer = cap(d.queues[0])
+		buffer = cap(d.shards[0])
 	}
 	return
 }
 
-// 使用 dispatcher.go 中的 extractSubProto 与 readPositiveInt
 func (d *SendDispatcher) String() string {
 	ch, w, b := d.Snapshot()
-	return fmt.Sprintf("SendDispatcher{channels=%d workers=%d buffer=%d}", ch, w, b)
+	return fmt.Sprintf("SendDispatcher{channels=%d workers=%d buffer=%d connBuffer=%d enqueueTimeout=%s}", ch, w, b, d.connBuffer, d.enqueueTimeout)
+}
+
+// writeFrame encodes and writes a frame, preferring a zero-copy path for HeaderTcp.
+func writeFrame(conn net.Conn, codec core.IHeaderCodec, hdr core.IHeader, payload []byte) error {
+	switch c := codec.(type) {
+	case header.HeaderTcpCodec:
+		return writeTCPFrame(conn, c, hdr, payload)
+	case *header.HeaderTcpCodec:
+		return writeTCPFrame(conn, *c, hdr, payload)
+	default:
+		frame, err := codec.Encode(hdr, payload)
+		if err != nil {
+			return err
+		}
+		_, err = conn.Write(frame)
+		return err
+	}
+}
+
+func writeTCPFrame(conn net.Conn, _ header.HeaderTcpCodec, hdr core.IHeader, payload []byte) error {
+	tcpHdr := header.CloneToTCP(hdr)
+	if tcpHdr == nil {
+		return errNilCodec
+	}
+	if uint32(len(payload)) != tcpHdr.PayloadLen {
+		tcpHdr.PayloadLen = uint32(len(payload))
+	}
+	buf := make([]byte, 24)
+	buf[0] = tcpHdr.TypeFmt
+	buf[1] = tcpHdr.Flags
+	binary.BigEndian.PutUint32(buf[2:6], tcpHdr.MsgID)
+	binary.BigEndian.PutUint32(buf[6:10], tcpHdr.Source)
+	binary.BigEndian.PutUint32(buf[10:14], tcpHdr.Target)
+	binary.BigEndian.PutUint32(buf[14:18], tcpHdr.Timestamp)
+	binary.BigEndian.PutUint32(buf[18:22], tcpHdr.PayloadLen)
+	binary.BigEndian.PutUint16(buf[22:24], tcpHdr.Reserved)
+	if len(payload) == 0 {
+		_, err := conn.Write(buf)
+		return err
+	}
+	_, err := (&net.Buffers{buf, payload}).WriteTo(conn)
+	return err
+}
+
+func readDurationMs(cfg core.IConfig, key string, def int) time.Duration {
+	if cfg == nil {
+		return time.Duration(def) * time.Millisecond
+	}
+	if raw, ok := cfg.Get(key); ok {
+		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
+			return time.Duration(v) * time.Millisecond
+		}
+	}
+	return time.Duration(def) * time.Millisecond
 }

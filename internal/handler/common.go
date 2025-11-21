@@ -8,10 +8,9 @@ import (
 	"MyFlowHub-Core/internal/core/header"
 )
 
-// Sub-protocol ID 常量定义：统一管理避免分散在 demo 中。
+// Sub-protocol ID 常量定义：统一管理避免分散，demo 中用
 const (
 	SubProtoEcho = 1 // 回显子协议
-	// SubProtoUpper 已移除
 )
 
 // CloneRequest 封装请求头部的克隆操作。
@@ -43,10 +42,16 @@ func BuildResponse(req core.IHeader, payloadLen uint32, sub uint8) core.IHeader 
 	return header.BuildTCPResponse(req, payloadLen, sub)
 }
 
-// SendResponse 编码并通过连接发送响应。
-func SendResponse(log *slog.Logger, conn core.IConnection, req core.IHeader, payload []byte, sub uint8) {
+// SendResponse 编码并通过发送管线发送响应；若无法取得 server，则回退直接写连接。
+func SendResponse(ctx context.Context, log *slog.Logger, conn core.IConnection, req core.IHeader, payload []byte, sub uint8) {
 	codec := header.HeaderTcpCodec{}
 	resp := BuildResponse(req, uint32(len(payload)), sub)
+	if srv := extractServer(ctx); srv != nil {
+		if err := srv.Send(ctx, conn.ID(), resp, payload); err != nil && log != nil {
+			log.Error("发送响应失败", "err", err)
+		}
+		return
+	}
 	if err := conn.SendWithHeader(resp, payload, codec); err != nil {
 		if log != nil {
 			log.Error("发送响应失败", "err", err)

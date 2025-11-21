@@ -11,7 +11,6 @@ import (
 
 // LoginHandler (SubProto=2) 负责分配节点 ID；自增且不重复。
 // 登录后将分配的 nodeID 写入连接元数据，供路由阶段使用。
-
 var globalNodeID atomic.Uint32
 
 func init() { globalNodeID.Store(2) } // 1 留给默认 server
@@ -40,5 +39,5 @@ func (h *LoginHandler) OnReceive(ctx context.Context, conn core.IConnection, hdr
 	respObj := map[string]uint32{"id": id}
 	data, _ := json.Marshal(respObj)
 	req := CloneRequest(hdr)
-	SendResponse(h.log, conn, req, data, h.SubProto())
+	SendResponse(ctx, h.log, conn, req, data, h.SubProto())
 }

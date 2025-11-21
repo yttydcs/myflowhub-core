@@ -15,6 +15,8 @@ const (
 	KeySendChannelCount     = "send.channel_count"
 	KeySendWorkersPerChan   = "send.workers_per_channel"
 	KeySendChannelBuffer    = "send.channel_buffer"
+	KeySendConnBuffer       = "send.conn_buffer"
+	KeySendEnqueueTimeoutMS = "send.enqueue_timeout_ms"
 	KeyRoutingForwardRemote = "routing.forward_remote"
 	KeyProcQueueStrategy    = "process.queue_strategy" // conn|subproto|source_target|roundrobin
 	KeyDefaultForwardEnable = "routing.default_forward_enable"
@@ -34,6 +36,8 @@ func NewMap(data map[string]string) *MapConfig {
 	ensureDefault(mc.data, KeySendChannelCount, "1")
 	ensureDefault(mc.data, KeySendWorkersPerChan, "1")
 	ensureDefault(mc.data, KeySendChannelBuffer, "64")
+	ensureDefault(mc.data, KeySendConnBuffer, "64")
+	ensureDefault(mc.data, KeySendEnqueueTimeoutMS, "100")
 	ensureDefault(mc.data, KeyRoutingForwardRemote, "true")
 	ensureDefault(mc.data, KeyProcQueueStrategy, "conn")
 	ensureDefault(mc.data, KeyDefaultForwardEnable, "false")

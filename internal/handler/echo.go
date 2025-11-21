@@ -23,9 +23,8 @@ func NewEchoHandler(log *slog.Logger) *EchoHandler {
 func (h *EchoHandler) SubProto() uint8 { return SubProtoEcho }
 
 func (h *EchoHandler) OnReceive(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) {
-	_ = ctx
 	req := CloneRequest(hdr)
 	respPayload := []byte(fmt.Sprintf("ECHO: %s", string(payload)))
 	h.log.Info("EchoHandler", "conn", conn.ID(), "payload", string(payload))
-	SendResponse(h.log, conn, req, respPayload, h.SubProto())
+	SendResponse(ctx, h.log, conn, req, respPayload, h.SubProto())
 }

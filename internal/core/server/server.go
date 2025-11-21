@@ -115,7 +115,12 @@ func (s *Server) Start(ctx context.Context) error {
 		s.wg.Add(1)
 		go s.serveConn(c)
 	}
-	s.cm.SetHooks(core.ConnectionHooks{OnAdd: onAdd, OnRemove: func(c core.IConnection) { s.proc.OnClose(c) }})
+	s.cm.SetHooks(core.ConnectionHooks{OnAdd: onAdd, OnRemove: func(c core.IConnection) {
+		if s.sender != nil {
+			s.sender.CloseConn(c.ID())
+		}
+		s.proc.OnClose(c)
+	}})
 	s.start = true
 	go func() {
 		if err := s.lst.Listen(s.ctx, s.cm); err != nil {
