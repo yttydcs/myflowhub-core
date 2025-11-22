@@ -272,6 +272,8 @@ func TestConnectionManager(t *testing.T) {
 
 	// 创建模拟连接
 	mockConn := &mockConnection{id: "test-conn-1"}
+	mockConn.SetMeta("nodeID", uint32(100))
+	mockConn.SetMeta("deviceID", "dev-1")
 
 	// 添加连接
 	if err := cm.Add(mockConn); err != nil {
@@ -290,6 +292,14 @@ func TestConnectionManager(t *testing.T) {
 	}
 	if conn.ID() != "test-conn-1" {
 		t.Errorf("连接 ID 不匹配: got %s, want test-conn-1", conn.ID())
+	}
+	// 按 nodeID 获取
+	if c2, ok := cm.GetByNode(100); !ok || c2.ID() != "test-conn-1" {
+		t.Errorf("按 nodeID 获取失败")
+	}
+	// 按 deviceID 获取
+	if c3, ok := cm.GetByDevice("dev-1"); !ok || c3.ID() != "test-conn-1" {
+		t.Errorf("按 deviceID 获取失败")
 	}
 
 	// 遍历连接

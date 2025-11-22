@@ -152,6 +152,10 @@ type IConnectionManager interface {
 	GetByNode(nodeID uint32) (IConnection, bool)
 	// UpdateNodeIndex 更新节点索引映射（用于登录/登出）。
 	UpdateNodeIndex(nodeID uint32, conn IConnection)
+	// GetByDevice 按设备 ID 获取连接（若支持）。
+	GetByDevice(deviceID string) (IConnection, bool)
+	// UpdateDeviceIndex 更新设备索引映射（用于登录/登出）。
+	UpdateDeviceIndex(deviceID string, conn IConnection)
 }
 
 // ConnectionHooks 连接事件钩子。

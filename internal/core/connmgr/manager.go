@@ -13,12 +13,14 @@ type Manager struct {
 	conns     map[string]core.IConnection
 	hooks     core.ConnectionHooks
 	nodeIndex map[uint32]core.IConnection
+	devIndex  map[string]core.IConnection
 }
 
 func New() *Manager {
 	return &Manager{
 		conns:     make(map[string]core.IConnection),
 		nodeIndex: make(map[uint32]core.IConnection),
+		devIndex:  make(map[string]core.IConnection),
 	}
 }
 
@@ -40,6 +42,7 @@ func (m *Manager) Add(conn core.IConnection) error {
 	}
 	m.conns[conn.ID()] = conn
 	m.addNodeIndexLocked(conn)
+	m.addDeviceIndexLocked(conn)
 	h := m.hooks
 	m.mu.Unlock()
 	if h.OnAdd != nil {
@@ -59,6 +62,17 @@ func (m *Manager) addNodeIndexLocked(conn core.IConnection) {
 	}
 }
 
+func (m *Manager) addDeviceIndexLocked(conn core.IConnection) {
+	if conn == nil {
+		return
+	}
+	if devID, ok := conn.GetMeta("deviceID"); ok {
+		if s, ok2 := devID.(string); ok2 && s != "" {
+			m.devIndex[s] = conn
+		}
+	}
+}
+
 func (m *Manager) Remove(id string) error {
 	m.mu.Lock()
 	conn, ok := m.conns[id]
@@ -67,6 +81,7 @@ func (m *Manager) Remove(id string) error {
 		return errors.New("conn not found")
 	}
 	m.removeNodeIndexLocked(conn)
+	m.removeDeviceIndexLocked(conn)
 	delete(m.conns, id)
 	h := m.hooks
 	m.mu.Unlock()
@@ -85,6 +100,18 @@ func (m *Manager) removeNodeIndexLocked(conn core.IConnection) {
 			if existing, ok3 := m.nodeIndex[nid]; ok3 && existing == conn {
 				delete(m.nodeIndex, nid)
 			}
+		}
+	}
+}
+
+func (m *Manager) removeDeviceIndexLocked(conn core.IConnection) {
+	if conn == nil {
+		return
+	}
+	// 清理所有指向该连接的设备索引，防止未存 meta 时泄漏
+	for dev, c := range m.devIndex {
+		if c == conn {
+			delete(m.devIndex, dev)
 		}
 	}
 }
@@ -118,6 +145,30 @@ func (m *Manager) UpdateNodeIndex(nodeID uint32, conn core.IConnection) {
 		return
 	}
 	m.nodeIndex[nodeID] = conn
+}
+
+func (m *Manager) GetByDevice(devID string) (core.IConnection, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	c, ok := m.devIndex[devID]
+	return c, ok
+}
+
+func (m *Manager) UpdateDeviceIndex(devID string, conn core.IConnection) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if devID == "" {
+		return
+	}
+	if conn == nil {
+		if existing, ok := m.devIndex[devID]; ok {
+			if existing != nil {
+				delete(m.devIndex, devID)
+			}
+		}
+		return
+	}
+	m.devIndex[devID] = conn
 }
 
 func (m *Manager) Range(fn func(core.IConnection) bool) {

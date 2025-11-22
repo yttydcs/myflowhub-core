@@ -68,6 +68,15 @@ func (p *PreRoutingProcess) PreRoute(ctx context.Context, conn core.IConnection,
 		p.log.Warn("空头部，跳过")
 		return true
 	}
+	// SourceID=0 仅放行登录子协议（SubProto=2），其余直接丢弃
+	if hdr.SourceID() == 0 && hdr.SubProto() != 2 {
+		p.log.Debug("丢弃未登录来源的非登录协议帧", "subproto", hdr.SubProto())
+		return false
+	}
+	// 登录协议直接放行到 dispatcher，由子协议处理器处理
+	if hdr.SubProto() == 2 {
+		return true
+	}
 	target := hdr.TargetID()
 	local := srv.NodeID()
 	srcIsParent := isParentConn(conn)
