@@ -43,7 +43,7 @@ func NewMap(data map[string]string) *MapConfig {
 	ensureDefault(mc.data, KeySendEnqueueTimeoutMS, "100")
 	ensureDefault(mc.data, KeyRoutingForwardRemote, "true")
 	ensureDefault(mc.data, KeyProcQueueStrategy, "conn")
-	ensureDefault(mc.data, KeyDefaultForwardEnable, "false")
+	ensureDefault(mc.data, KeyDefaultForwardEnable, "")
 	ensureDefault(mc.data, KeyDefaultForwardTarget, "")
 	ensureDefault(mc.data, KeyDefaultForwardMap, "")
 	ensureDefault(mc.data, KeyParentEnable, "false")

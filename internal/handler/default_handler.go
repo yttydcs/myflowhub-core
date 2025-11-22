@@ -10,21 +10,29 @@ import (
 	coreconfig "MyFlowHub-Core/internal/core/config"
 )
 
-// DefaultForwardHandler 丢弃未知子协议，或按配置转发到指定节点。
+// DefaultForwardHandler 丢弃未知子协议，或按配置转发到指定节点；若未配置则默认尝试转发给父节点。
 type DefaultForwardHandler struct {
-	log        *slog.Logger
-	forward    bool
-	subTargets map[uint8]uint32
+	log            *slog.Logger
+	forward        bool
+	subTargets     map[uint8]uint32
+	fallbackParent bool
 }
 
 func NewDefaultForwardHandler(cfg core.IConfig, log *slog.Logger) *DefaultForwardHandler {
 	if log == nil {
 		log = slog.Default()
 	}
-	h := &DefaultForwardHandler{log: log, subTargets: make(map[uint8]uint32)}
+	h := &DefaultForwardHandler{
+		log:            log,
+		subTargets:     make(map[uint8]uint32),
+		fallbackParent: true, // 未配置时默认转发给父节点
+	}
 	if cfg != nil {
 		if raw, ok := cfg.Get(coreconfig.KeyDefaultForwardEnable); ok {
-			h.forward = core.ParseBool(raw, false)
+			if strings.TrimSpace(raw) != "" { // 显式配置才覆盖默认行为
+				h.forward = core.ParseBool(raw, false)
+				h.fallbackParent = false
+			}
 		}
 		if raw, ok := cfg.Get(coreconfig.KeyDefaultForwardTarget); ok {
 			if id, err := parseUint32(raw); err == nil {
@@ -64,27 +72,32 @@ func (h *DefaultForwardHandler) OnReceive(ctx context.Context, conn core.IConnec
 	if hdr == nil {
 		return
 	}
-	if !h.forward {
-		h.log.Debug("unknown subproto dropped", "subproto", hdr.SubProto(), "conn", conn.ID())
-		return
-	}
-	targetNode := h.resolveTarget(hdr.SubProto())
-	if targetNode == 0 {
-		h.log.Debug("no default route for subproto", "subproto", hdr.SubProto())
-		return
-	}
 	srv := core.ServerFromContext(ctx)
 	if srv == nil {
 		h.log.Warn("no server context, cannot forward", "conn", conn.ID())
 		return
 	}
-	targetHeader := CloneWithTarget(hdr, targetNode)
-	if targetHeader == nil {
-		h.log.Warn("cannot clone header for forwarding")
+	targetNode := h.resolveTarget(hdr.SubProto())
+	if h.forward && targetNode != 0 {
+		targetHeader := CloneWithTarget(hdr, targetNode)
+		if targetHeader == nil {
+			h.log.Warn("cannot clone header for forwarding")
+			return
+		}
+		targetHeader.WithSourceID(srv.NodeID())
+		h.forwardToNode(ctx, srv, targetHeader, payload)
 		return
 	}
-	targetHeader.WithSourceID(srv.NodeID())
-	h.forwardToNode(ctx, srv, targetHeader, payload)
+	if h.forward && targetNode == 0 {
+		h.log.Debug("no default route for subproto", "subproto", hdr.SubProto())
+		return
+	}
+	// 未配置或未命中：尝试转发给父节点
+	if h.fallbackParent {
+		h.forwardToParent(ctx, srv, hdr, payload)
+		return
+	}
+	h.log.Debug("unknown subproto dropped", "subproto", hdr.SubProto(), "conn", conn.ID())
 }
 
 func (h *DefaultForwardHandler) resolveTarget(sub uint8) uint32 {
@@ -119,6 +132,37 @@ func (h *DefaultForwardHandler) forwardToNode(ctx context.Context, srv core.ISer
 	if !forwarded {
 		h.log.Warn("default target not found", "target", hdr.TargetID())
 	}
+}
+
+func (h *DefaultForwardHandler) forwardToParent(ctx context.Context, srv core.IServer, hdr core.IHeader, payload []byte) {
+	parent, ok := findParentConn(srv.ConnManager())
+	if !ok {
+		h.log.Debug("no parent connection, drop unknown subproto", "subproto", hdr.SubProto())
+		return
+	}
+	clone := CloneRequest(hdr)
+	if clone == nil {
+		h.log.Warn("cannot clone header for parent forward")
+		return
+	}
+	clone.WithSourceID(srv.NodeID())
+	if err := srv.Send(ctx, parent.ID(), clone, payload); err != nil {
+		h.log.Error("forward to parent failed", "err", err, "conn", parent.ID())
+	}
+}
+
+func findParentConn(cm core.IConnectionManager) (core.IConnection, bool) {
+	var parent core.IConnection
+	cm.Range(func(c core.IConnection) bool {
+		if role, ok := c.GetMeta(core.MetaRoleKey); ok {
+			if s, ok2 := role.(string); ok2 && s == core.RoleParent {
+				parent = c
+				return false
+			}
+		}
+		return true
+	})
+	return parent, parent != nil
 }
 
 func parseUint32(v string) (uint32, error) {
