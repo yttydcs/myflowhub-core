@@ -125,7 +125,7 @@ func (l *TCPListener) Listen(ctx context.Context, cm core.IConnectionManager) er
 		}
 
 		// 包装为 core.IConnection 并加入连接管理器
-		c := newTCPConnection(conn)
+		c := NewTCPConnection(conn)
 		if err := cm.Add(c); err != nil {
 			log.Warn("failed to add connection to manager", "remote", conn.RemoteAddr().String(), "err", err)
 			_ = conn.Close()

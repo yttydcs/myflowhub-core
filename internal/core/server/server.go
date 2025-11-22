@@ -4,9 +4,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
+	"strconv"
 	"sync"
+	"time"
 
 	core "MyFlowHub-Core/internal/core"
+	coreconfig "MyFlowHub-Core/internal/core/config"
+	"MyFlowHub-Core/internal/core/listener/tcp_listener"
 	"MyFlowHub-Core/internal/core/process"
 	"MyFlowHub-Core/internal/core/reader"
 )
@@ -27,6 +32,41 @@ type Options struct {
 	NodeID        uint32 // 可选：节点 ID，缺省为 1
 }
 
+type parentConfig struct {
+	enable    bool
+	addr      string
+	reconnect time.Duration
+}
+
+type parentState struct {
+	parentConfig
+	mu     sync.Mutex
+	connID string
+	down   chan struct{}
+}
+
+func (p *parentState) hasParent() bool {
+	return p != nil && p.enable && p.addr != ""
+}
+
+func (p *parentState) setConn(id string) <-chan struct{} {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.connID = id
+	p.down = make(chan struct{})
+	return p.down
+}
+
+func (p *parentState) notifyDown(id string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if id != "" && id == p.connID && p.down != nil {
+		close(p.down)
+		p.down = nil
+		p.connID = ""
+	}
+}
+
 // Server 是 IServer 的具体实现，负责协调 listener/manager/process。
 type Server struct {
 	opts   Options
@@ -39,6 +79,8 @@ type Server struct {
 	rFac   ReaderFactory
 	nodeID uint32
 	sender *process.SendDispatcher
+
+	parent *parentState
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -82,6 +124,7 @@ func New(opts Options) (*Server, error) {
 	} else {
 		return nil, err
 	}
+	parent := buildParentState(opts.Config)
 	return &Server{
 		opts:   opts,
 		log:    opts.Logger,
@@ -93,6 +136,7 @@ func New(opts Options) (*Server, error) {
 		rFac:   opts.ReaderFactory,
 		nodeID: opts.NodeID,
 		sender: sendDisp,
+		parent: parent,
 	}, nil
 }
 
@@ -106,8 +150,11 @@ func (s *Server) Start(ctx context.Context) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 	s.ctx = core.WithServerContext(s.ctx, s)
 	onAdd := func(c core.IConnection) {
+		if _, ok := c.GetMeta(core.MetaRoleKey); !ok {
+			c.SetMeta(core.MetaRoleKey, core.RoleChild)
+		}
 		c.OnReceive(func(c core.IConnection, hdr core.IHeader, payload []byte) {
-			ctx2 := core.WithServerContext(ctx, s)
+			ctx2 := core.WithServerContext(s.ctx, s)
 			s.proc.OnReceive(ctx2, c, hdr, payload)
 		})
 		s.proc.OnListen(c)
@@ -119,8 +166,14 @@ func (s *Server) Start(ctx context.Context) error {
 			s.sender.CloseConn(c.ID())
 		}
 		s.proc.OnClose(c)
+		if s.parent != nil {
+			s.parent.notifyDown(c.ID())
+		}
 	}})
 	s.start = true
+	if s.parent.hasParent() {
+		go s.runParentLink(s.ctx)
+	}
 	go func() {
 		if err := s.lst.Listen(s.ctx, s.cm); err != nil {
 			s.log.Error("listener exited", "err", err)
@@ -221,4 +274,70 @@ func (s *Server) Broadcast(ctx context.Context, hdr core.IHeader, payload []byte
 		return true
 	})
 	return firstErr
+}
+
+func (s *Server) runParentLink(ctx context.Context) {
+	if s.parent == nil || !s.parent.hasParent() {
+		return
+	}
+	retry := s.parent.reconnect
+	if retry <= 0 {
+		retry = 3 * time.Second
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		raw, err := net.Dial("tcp", s.parent.addr)
+		if err != nil {
+			s.log.Warn("dial parent failed", "addr", s.parent.addr, "err", err)
+			time.Sleep(retry)
+			continue
+		}
+		conn := tcp_listener.NewTCPConnection(raw)
+		conn.SetMeta(core.MetaRoleKey, core.RoleParent)
+		if err := s.cm.Add(conn); err != nil {
+			s.log.Warn("add parent connection failed", "addr", s.parent.addr, "err", err)
+			_ = raw.Close()
+			time.Sleep(retry)
+			continue
+		}
+		down := s.parent.setConn(conn.ID())
+		s.log.Info("parent connected", "addr", s.parent.addr, "conn", conn.ID())
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+			return
+		case <-down:
+			s.log.Warn("parent connection closed, retrying", "addr", s.parent.addr)
+			time.Sleep(retry)
+		}
+	}
+}
+
+func buildParentState(cfg core.IConfig) *parentState {
+	p := &parentState{
+		parentConfig: parentConfig{
+			enable:    false,
+			addr:      "",
+			reconnect: 3 * time.Second,
+		},
+	}
+	if cfg == nil {
+		return p
+	}
+	if raw, ok := cfg.Get(coreconfig.KeyParentEnable); ok {
+		p.enable = core.ParseBool(raw, false)
+	}
+	if raw, ok := cfg.Get(coreconfig.KeyParentAddr); ok {
+		p.addr = raw
+	}
+	if raw, ok := cfg.Get(coreconfig.KeyParentReconnectSec); ok {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			p.reconnect = time.Duration(v) * time.Second
+		}
+	}
+	return p
 }

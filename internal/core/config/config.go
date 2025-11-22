@@ -22,6 +22,9 @@ const (
 	KeyDefaultForwardEnable = "routing.default_forward_enable"
 	KeyDefaultForwardTarget = "routing.default_forward_target"
 	KeyDefaultForwardMap    = "routing.default_forward_map"
+	KeyParentEnable         = "parent.enable"
+	KeyParentAddr           = "parent.addr"
+	KeyParentReconnectSec   = "parent.reconnect_sec"
 )
 
 // NewMap 使用传入 map 构建 MapConfig；若 data 为空则初始化为空 map。
@@ -43,6 +46,9 @@ func NewMap(data map[string]string) *MapConfig {
 	ensureDefault(mc.data, KeyDefaultForwardEnable, "false")
 	ensureDefault(mc.data, KeyDefaultForwardTarget, "")
 	ensureDefault(mc.data, KeyDefaultForwardMap, "")
+	ensureDefault(mc.data, KeyParentEnable, "false")
+	ensureDefault(mc.data, KeyParentAddr, "")
+	ensureDefault(mc.data, KeyParentReconnectSec, "3")
 	return mc
 }
 

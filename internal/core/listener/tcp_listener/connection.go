@@ -19,7 +19,8 @@ type tcpConnection struct {
 	reader core.IReader
 }
 
-func newTCPConnection(c net.Conn) *tcpConnection {
+// NewTCPConnection wraps a net.Conn into the framework's IConnection implementation.
+func NewTCPConnection(c net.Conn) *tcpConnection {
 	return &tcpConnection{
 		conn: c,
 		id:   fmt.Sprintf("%s->%s", c.LocalAddr().String(), c.RemoteAddr().String()),
