@@ -63,6 +63,8 @@ type IServer interface {
 	HeaderCodec() IHeaderCodec
 	// NodeID 返回当前节点 ID
 	NodeID() uint32
+	// UpdateNodeID 运行期更新当前节点 ID
+	UpdateNodeID(uint32)
 	// Send 将 header+payload 发送给指定连接，并触发处理钩子
 	Send(ctx context.Context, connID string, hdr IHeader, payload []byte) error
 }

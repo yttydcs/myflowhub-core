@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	core "MyFlowHub-Core/internal/core"
@@ -77,7 +78,7 @@ type Server struct {
 	cfg    core.IConfig
 	lst    core.IListener
 	rFac   ReaderFactory
-	nodeID uint32
+	nodeID atomic.Uint32
 	sender *process.SendDispatcher
 
 	parent *parentState
@@ -125,7 +126,7 @@ func New(opts Options) (*Server, error) {
 		return nil, err
 	}
 	parent := buildParentState(opts.Config)
-	return &Server{
+	s := &Server{
 		opts:   opts,
 		log:    opts.Logger,
 		cm:     opts.Manager,
@@ -134,10 +135,11 @@ func New(opts Options) (*Server, error) {
 		cfg:    opts.Config,
 		lst:    opts.Listener,
 		rFac:   opts.ReaderFactory,
-		nodeID: opts.NodeID,
 		sender: sendDisp,
 		parent: parent,
-	}, nil
+	}
+	s.nodeID.Store(opts.NodeID)
+	return s, nil
 }
 
 // Start 启动监听与连接循环。
@@ -241,7 +243,13 @@ func (s *Server) Config() core.IConfig                 { return s.cfg }
 func (s *Server) ConnManager() core.IConnectionManager { return s.cm }
 func (s *Server) Process() core.IProcess               { return s.proc }
 func (s *Server) HeaderCodec() core.IHeaderCodec       { return s.codec }
-func (s *Server) NodeID() uint32                       { return s.nodeID }
+func (s *Server) NodeID() uint32                       { return s.nodeID.Load() }
+func (s *Server) UpdateNodeID(id uint32) {
+	if id == 0 {
+		return
+	}
+	s.nodeID.Store(id)
+}
 func (s *Server) Send(ctx context.Context, connID string, hdr core.IHeader, payload []byte) error {
 	conn, ok := s.cm.Get(connID)
 	if !ok {

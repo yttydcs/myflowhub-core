@@ -3,6 +3,7 @@ package login_server
 import (
 	"strconv"
 
+	core "MyFlowHub-Core/internal/core"
 	coreconfig "MyFlowHub-Core/internal/core/config"
 )
 
@@ -16,6 +17,7 @@ type Config struct {
 	ParentReconnectSec int
 	RootToken          string
 	RootNodeID         uint32
+	SelfID             string
 
 	ProcessChannels   int
 	ProcessWorkers    int
@@ -26,9 +28,10 @@ type Config struct {
 	SendConnBuffer    int
 }
 
-func (c Config) toMapConfig() *coreconfig.MapConfig {
+func (c Config) toCoreConfig() core.IConfig {
 	data := map[string]string{
 		"addr":                             c.Addr,
+		"node.id":                          strconv.Itoa(int(c.NodeID)),
 		coreconfig.KeyParentEnable:         strconv.FormatBool(c.ParentEnable),
 		coreconfig.KeyParentAddr:           c.ParentAddr,
 		coreconfig.KeyParentReconnectSec:   strconv.Itoa(maxInt(c.ParentReconnectSec, 1)),
@@ -40,7 +43,9 @@ func (c Config) toMapConfig() *coreconfig.MapConfig {
 		coreconfig.KeySendChannelBuffer:    strconv.Itoa(maxInt(c.SendChannelBuffer, 64)),
 		coreconfig.KeySendConnBuffer:       strconv.Itoa(maxInt(c.SendConnBuffer, 64)),
 		coreconfig.KeySendEnqueueTimeoutMS: "200",
-		"authority.node_id":                strconv.Itoa(int(c.RootNodeID)),
+		"root.node_id":                     strconv.Itoa(int(c.RootNodeID)),
+		"root.token":                       c.RootToken,
+		"self.id":                          c.SelfID,
 	}
 	return coreconfig.NewMap(data)
 }

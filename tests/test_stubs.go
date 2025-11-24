@@ -26,6 +26,7 @@ func (s *stubServer) ConnManager() core.IConnectionManager { return s.cm }
 func (s *stubServer) Process() core.IProcess               { return nil }
 func (s *stubServer) HeaderCodec() core.IHeaderCodec       { return nil }
 func (s *stubServer) NodeID() uint32                       { return s.nodeID }
+func (s *stubServer) UpdateNodeID(id uint32)               { s.nodeID = id }
 func (s *stubServer) Send(_ context.Context, connID string, hdr core.IHeader, _ []byte) error {
 	s.sends = append(s.sends, sendCall{connID: connID, target: hdr.TargetID()})
 	return nil
