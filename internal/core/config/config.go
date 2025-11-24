@@ -1,8 +1,12 @@
 package config
 
-import "sync"
+import (
+	"sync"
 
-// MapConfig 是最简单的 IConfig 实现：在内存 map 中存储键值。
+	core "MyFlowHub-Core/internal/core"
+)
+
+// MapConfig stores key/value pairs in memory and implements core.IConfig.
 type MapConfig struct {
 	mu   sync.RWMutex
 	data map[string]string
@@ -27,7 +31,7 @@ const (
 	KeyParentReconnectSec   = "parent.reconnect_sec"
 )
 
-// NewMap 使用传入 map 构建 MapConfig；若 data 为空则初始化为空 map。
+// NewMap builds a MapConfig from the provided data and fills defaults for missing keys.
 func NewMap(data map[string]string) *MapConfig {
 	mc := &MapConfig{data: make(map[string]string)}
 	for k, v := range data {
@@ -58,7 +62,7 @@ func ensureDefault(m map[string]string, key, val string) {
 	}
 }
 
-// Get 实现 core.IConfig；返回值与是否存在。
+// Get returns value and existence flag.
 func (m *MapConfig) Get(key string) (string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -66,9 +70,28 @@ func (m *MapConfig) Get(key string) (string, bool) {
 	return val, ok
 }
 
-// Set 允许在运行期更新配置。
+// Set updates a key at runtime.
 func (m *MapConfig) Set(key, val string) {
 	m.mu.Lock()
 	m.data[key] = val
 	m.mu.Unlock()
+}
+
+// Merge overlays another config into current config and returns itself.
+func (m *MapConfig) Merge(other core.IConfig) core.IConfig {
+	if m == nil || other == nil {
+		return m
+	}
+	if o, ok := other.(*MapConfig); ok && o != nil {
+		o.mu.RLock()
+		m.mu.Lock()
+		for k, v := range o.data {
+			m.data[k] = v
+		}
+		m.mu.Unlock()
+		o.mu.RUnlock()
+		return m
+	}
+	// Unable to enumerate other implementations; return as is.
+	return m
 }
