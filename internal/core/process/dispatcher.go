@@ -10,6 +10,7 @@ import (
 
 	core "MyFlowHub-Core/internal/core"
 	coreconfig "MyFlowHub-Core/internal/core/config"
+	"MyFlowHub-Core/internal/core/header"
 )
 
 // DispatchOptions 定义 DispatcherProcess 的运行参数。
@@ -206,15 +207,21 @@ func (p *DispatcherProcess) callHandler(ctx context.Context, handler core.ISubPr
 
 // route 现在仅组合三步。
 func (p *DispatcherProcess) route(evt dispatchEvent) {
-	if !p.preRoute(evt.ctx, evt.conn, evt.hdr, evt.payload) {
-		return
-	}
 	handler, sub := p.selectHandler(evt.hdr)
 	if handler == nil {
 		p.log.Warn("no handler for sub proto", "subproto", sub, "conn", evt.conn.ID())
 		return
 	}
-	p.callHandler(evt.ctx, handler, evt.conn, evt.hdr, evt.payload)
+
+	cont := p.preRoute(evt.ctx, evt.conn, evt.hdr, evt.payload)
+	if cont {
+		p.callHandler(evt.ctx, handler, evt.conn, evt.hdr, evt.payload)
+		return
+	}
+	// preRoute 已处理/转发。若是 Cmd 帧且 handler 声明接受 Cmd，则仍本地处理一次（不影响转发）。
+	if shouldInterceptCmd(handler, evt.hdr) {
+		p.callHandler(evt.ctx, handler, evt.conn, evt.hdr, evt.payload)
+	}
 }
 
 func extractSubProto(h core.IHeader) (uint8, bool) {
@@ -236,6 +243,24 @@ func (p *DispatcherProcess) getFallback() core.ISubProcess {
 	fb := p.fallback
 	p.mu.RUnlock()
 	return fb
+}
+
+// CmdInterceptable 可选接口：声明 handler 是否需要在 Cmd 帧目标非本地时仍本地处理一次。
+type CmdInterceptable interface {
+	AcceptCmd() bool
+}
+
+func shouldInterceptCmd(h core.ISubProcess, hdr core.IHeader) bool {
+	if h == nil || hdr == nil {
+		return false
+	}
+	if hdr.Major() != header.MajorCmd {
+		return false
+	}
+	if ci, ok := h.(CmdInterceptable); ok {
+		return ci.AcceptCmd()
+	}
+	return false
 }
 
 // Shutdown 关闭 worker 池。

@@ -84,6 +84,9 @@ func NewVarStoreHandler(log *slog.Logger) *VarStoreHandler {
 	}
 }
 
+// AcceptCmd 声明 Cmd 帧在 target!=local 时也需要本地处理一次。
+func (h *VarStoreHandler) AcceptCmd() bool { return true }
+
 func (h *VarStoreHandler) SubProto() uint8 { return 3 }
 
 func (h *VarStoreHandler) OnReceive(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) {
@@ -171,8 +174,10 @@ func (h *VarStoreHandler) handleSet(ctx context.Context, conn core.IConnection, 
 	}
 
 	// forward upstream
-	if parent := h.findParent(ctx); parent != nil {
-		h.forward(ctx, parent, actionVarAssistSet, req, hdr.SourceID())
+	if shouldForwardUp(ctx, hdr) {
+		if parent := h.findParent(ctx); parent != nil {
+			h.forward(ctx, parent, actionVarAssistSet, req, hdr.SourceID())
+		}
 	}
 }
 
@@ -199,11 +204,16 @@ func (h *VarStoreHandler) handleGet(ctx context.Context, conn core.IConnection, 
 		h.sendResp(ctx, conn, hdr, actionVarGetResp, varResp{Code: 403, Msg: "forbidden"})
 		return
 	}
-	if parent := h.findParent(ctx); parent != nil {
-		h.addPending(req.Name, conn.ID())
-		h.forward(ctx, parent, actionVarAssistGet, req, hdr.SourceID())
+	if shouldForwardUp(ctx, hdr) {
+		if parent := h.findParent(ctx); parent != nil {
+			h.addPending(req.Name, conn.ID())
+			h.forward(ctx, parent, actionVarAssistGet, req, hdr.SourceID())
+			return
+		}
+		h.sendResp(ctx, conn, hdr, actionVarGetResp, varResp{Code: 404, Msg: "not found"})
 		return
 	}
+	// 无法上行且未命中
 	h.sendResp(ctx, conn, hdr, actionVarGetResp, varResp{Code: 404, Msg: "not found"})
 }
 
@@ -433,4 +443,18 @@ func defaultType(typ string) string {
 		return "string"
 	}
 	return typ
+}
+
+func shouldForwardUp(ctx context.Context, hdr core.IHeader) bool {
+	if hdr == nil {
+		return true
+	}
+	srv := core.ServerFromContext(ctx)
+	if srv == nil {
+		return true
+	}
+	local := srv.NodeID()
+	tgt := hdr.TargetID()
+	// 仅在目标是本地或 0（上送父）时由 handler 主动上行；否则预路由已转发，无需重复。
+	return tgt == 0 || tgt == local
 }
