@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,6 +33,11 @@ const (
 	actionAssistQueryCredResp = "assist_query_credential_resp"
 	actionOffline             = "offline"
 	actionAssistOffline       = "assist_offline"
+	actionGetPerms            = "get_perms"
+	actionGetPermsResp        = "get_perms_resp"
+	actionListRoles           = "list_roles"
+	actionListRolesResp       = "list_roles_resp"
+	actionPermsInvalidate     = "perms_invalidate"
 )
 
 type message struct {
@@ -65,16 +72,35 @@ type offlineData struct {
 }
 
 type respData struct {
-	Code       int    `json:"code"`
-	Msg        string `json:"msg,omitempty"`
-	DeviceID   string `json:"device_id,omitempty"`
-	NodeID     uint32 `json:"node_id,omitempty"`
-	Credential string `json:"credential,omitempty"`
+	Code       int      `json:"code"`
+	Msg        string   `json:"msg,omitempty"`
+	DeviceID   string   `json:"device_id,omitempty"`
+	NodeID     uint32   `json:"node_id,omitempty"`
+	Credential string   `json:"credential,omitempty"`
+	Role       string   `json:"role,omitempty"`
+	Perms      []string `json:"perms,omitempty"`
 }
 
 type bindingRecord struct {
 	NodeID     uint32
 	Credential string
+	Role       string
+	Perms      []string
+}
+
+type permsQueryData struct {
+	NodeID uint32 `json:"node_id"`
+}
+
+type invalidateData struct {
+	NodeIDs []uint32 `json:"node_ids,omitempty"`
+	Reason  string   `json:"reason,omitempty"`
+}
+
+type rolePermEntry struct {
+	NodeID uint32   `json:"node_id,omitempty"`
+	Role   string   `json:"role,omitempty"`
+	Perms  []string `json:"perms,omitempty"`
 }
 
 // LoginHandler implements register/login/revoke/offline flows with action+data payload.
@@ -88,9 +114,18 @@ type LoginHandler struct {
 	pendingConn map[string]string        // deviceID -> connID (in-flight assist)
 
 	authNode uint32
+
+	defaultRole  string
+	defaultPerms []string
+	nodeRoles    map[uint32]string
+	rolePerms    map[string][]string
 }
 
 func NewLoginHandler(log *slog.Logger) *LoginHandler {
+	return NewLoginHandlerWithConfig(nil, log)
+}
+
+func NewLoginHandlerWithConfig(cfg core.IConfig, log *slog.Logger) *LoginHandler {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -98,7 +133,11 @@ func NewLoginHandler(log *slog.Logger) *LoginHandler {
 		log:         log,
 		whitelist:   make(map[string]bindingRecord),
 		pendingConn: make(map[string]string),
+		defaultRole: "node",
+		nodeRoles:   make(map[uint32]string),
+		rolePerms:   make(map[string][]string),
 	}
+	h.loadAuthConfig(cfg)
 	h.nextID.Store(2)
 	return h
 }
@@ -135,6 +174,12 @@ func (h *LoginHandler) OnReceive(ctx context.Context, conn core.IConnection, hdr
 		h.handleOffline(ctx, conn, msg.Data, false)
 	case actionAssistOffline:
 		h.handleOffline(ctx, conn, msg.Data, true)
+	case actionGetPerms:
+		h.handleGetPerms(ctx, conn, msg.Data)
+	case actionListRoles:
+		h.handleListRoles(ctx, conn)
+	case actionPermsInvalidate:
+		h.handlePermsInvalidate(ctx, msg.Data)
 	default:
 		h.log.Debug("unknown login action", "action", act)
 	}
@@ -157,6 +202,8 @@ func (h *LoginHandler) handleRegister(ctx context.Context, conn core.IConnection
 			DeviceID:   req.DeviceID,
 			NodeID:     nodeID,
 			Credential: cred,
+			Role:       h.resolveRole(nodeID),
+			Perms:      h.resolvePerms(nodeID),
 		})
 		return
 	}
@@ -176,6 +223,8 @@ func (h *LoginHandler) handleRegister(ctx context.Context, conn core.IConnection
 		DeviceID:   req.DeviceID,
 		NodeID:     nodeID,
 		Credential: cred,
+		Role:       h.resolveRole(nodeID),
+		Perms:      h.resolvePerms(nodeID),
 	})
 }
 
@@ -197,6 +246,7 @@ func (h *LoginHandler) handleRegisterResp(ctx context.Context, data json.RawMess
 	}
 	if c, found := srv.ConnManager().Get(connID); found {
 		h.saveBinding(ctx, c, resp.DeviceID, resp.NodeID, resp.Credential)
+		h.applyRolePerms(resp.DeviceID, resp.NodeID, resp.Role, resp.Perms, c)
 		h.sendResp(ctx, c, nil, actionRegisterResp, resp)
 	}
 }
@@ -262,6 +312,7 @@ func (h *LoginHandler) handleLoginResp(ctx context.Context, data json.RawMessage
 	if c, found := srv.ConnManager().Get(connID); found {
 		if resp.Code == 1 {
 			h.saveBinding(ctx, c, resp.DeviceID, resp.NodeID, resp.Credential)
+			h.applyRolePerms(resp.DeviceID, resp.NodeID, resp.Role, resp.Perms, c)
 		}
 		h.sendResp(ctx, c, nil, actionLoginResp, resp)
 	}
@@ -294,7 +345,7 @@ func (h *LoginHandler) handleAssistQuery(ctx context.Context, conn core.IConnect
 		return
 	}
 	if rec, ok := h.lookup(req.DeviceID); ok {
-		h.sendResp(ctx, conn, hdr, actionAssistQueryCredResp, respData{Code: 1, Msg: "ok", DeviceID: req.DeviceID, NodeID: rec.NodeID, Credential: rec.Credential})
+		h.sendResp(ctx, conn, hdr, actionAssistQueryCredResp, respData{Code: 1, Msg: "ok", DeviceID: req.DeviceID, NodeID: rec.NodeID, Credential: rec.Credential, Role: rec.Role, Perms: rec.Perms})
 		return
 	}
 	h.sendResp(ctx, conn, hdr, actionAssistQueryCredResp, respData{Code: 4001, Msg: "not found"})
@@ -319,7 +370,8 @@ func (h *LoginHandler) handleAssistQueryResp(ctx context.Context, data json.RawM
 	if c, found := srv.ConnManager().Get(connID); found {
 		if resp.Code == 1 {
 			h.saveBinding(ctx, c, resp.DeviceID, resp.NodeID, resp.Credential)
-			h.sendResp(ctx, c, nil, actionLoginResp, respData{Code: 1, Msg: "ok", DeviceID: resp.DeviceID, NodeID: resp.NodeID, Credential: resp.Credential})
+			h.applyRolePerms(resp.DeviceID, resp.NodeID, resp.Role, resp.Perms, c)
+			h.sendResp(ctx, c, nil, actionLoginResp, respData{Code: 1, Msg: "ok", DeviceID: resp.DeviceID, NodeID: resp.NodeID, Credential: resp.Credential, Role: resp.Role, Perms: resp.Perms})
 			return
 		}
 		h.sendResp(ctx, c, nil, actionLoginResp, respData{Code: resp.Code, Msg: resp.Msg})
@@ -344,11 +396,14 @@ func (h *LoginHandler) handleOffline(ctx context.Context, conn core.IConnection,
 
 // helpers
 func (h *LoginHandler) saveBinding(ctx context.Context, conn core.IConnection, deviceID string, nodeID uint32, cred string) {
+	role, perms := h.resolveRolePerms(nodeID)
 	h.mu.Lock()
-	h.whitelist[deviceID] = bindingRecord{NodeID: nodeID, Credential: cred}
+	h.whitelist[deviceID] = bindingRecord{NodeID: nodeID, Credential: cred, Role: role, Perms: perms}
 	h.mu.Unlock()
 	conn.SetMeta("nodeID", nodeID)
 	conn.SetMeta("deviceID", deviceID)
+	conn.SetMeta("role", role)
+	conn.SetMeta("perms", perms)
 	if srv := core.ServerFromContext(ctx); srv != nil {
 		if cm := srv.ConnManager(); cm != nil {
 			if updater, ok := cm.(interface {
@@ -395,6 +450,12 @@ func (h *LoginHandler) lookup(deviceID string) (bindingRecord, bool) {
 	h.mu.RLock()
 	rec, ok := h.whitelist[deviceID]
 	h.mu.RUnlock()
+	if ok && rec.Role == "" {
+		rec.Role, rec.Perms = h.resolveRolePerms(rec.NodeID)
+		h.mu.Lock()
+		h.whitelist[deviceID] = rec
+		h.mu.Unlock()
+	}
 	return rec, ok
 }
 
@@ -574,6 +635,296 @@ func (h *LoginHandler) broadcast(ctx context.Context, src core.IConnection, acti
 		}
 		return true
 	})
+}
+
+// get_perms / list_roles / perms_invalidate handlers
+func (h *LoginHandler) handleGetPerms(ctx context.Context, conn core.IConnection, raw json.RawMessage) {
+	var req permsQueryData
+	if err := json.Unmarshal(raw, &req); err != nil || req.NodeID == 0 {
+		h.sendResp(ctx, conn, nil, actionGetPermsResp, respData{Code: 400, Msg: "invalid node_id"})
+		return
+	}
+	role, perms, ok := h.lookupByNode(req.NodeID)
+	if !ok || role == "" {
+		h.sendResp(ctx, conn, nil, actionGetPermsResp, respData{Code: 4404, Msg: "not found", NodeID: req.NodeID})
+		return
+	}
+	h.sendResp(ctx, conn, nil, actionGetPermsResp, respData{Code: 1, Msg: "ok", NodeID: req.NodeID, Role: role, Perms: perms})
+}
+
+func (h *LoginHandler) handleListRoles(ctx context.Context, conn core.IConnection) {
+	snapshot := h.listRolePerms()
+	data := struct {
+		Code  int             `json:"code"`
+		Msg   string          `json:"msg,omitempty"`
+		Roles []rolePermEntry `json:"roles,omitempty"`
+	}{
+		Code:  1,
+		Msg:   "ok",
+		Roles: snapshot,
+	}
+	payload, _ := json.Marshal(data)
+	msg := message{Action: actionListRolesResp, Data: payload}
+	body, _ := json.Marshal(msg)
+	hdr := h.buildHeader(ctx, nil)
+	if srv := core.ServerFromContext(ctx); srv != nil && conn != nil {
+		_ = srv.Send(ctx, conn.ID(), hdr, body)
+		return
+	}
+	if conn != nil {
+		_ = conn.SendWithHeader(hdr, body, header.HeaderTcpCodec{})
+	}
+}
+
+func (h *LoginHandler) handlePermsInvalidate(ctx context.Context, raw json.RawMessage) {
+	var req invalidateData
+	_ = json.Unmarshal(raw, &req)
+	h.invalidateCache(req.NodeIDs)
+	// 清理当前连接的 meta
+	if srv := core.ServerFromContext(ctx); srv != nil {
+		if cm := srv.ConnManager(); cm != nil {
+			targets := make(map[uint32]bool)
+			for _, id := range req.NodeIDs {
+				if id != 0 {
+					targets[id] = true
+				}
+			}
+			cm.Range(func(c core.IConnection) bool {
+				if len(targets) == 0 {
+					c.SetMeta("role", "")
+					c.SetMeta("perms", []string(nil))
+					return true
+				}
+				if nid, ok := c.GetMeta("nodeID"); ok {
+					if v, ok2 := nid.(uint32); ok2 && targets[v] {
+						c.SetMeta("role", "")
+						c.SetMeta("perms", []string(nil))
+					}
+				}
+				return true
+			})
+		}
+		// 广播给子节点（不回父）
+		srv.ConnManager().Range(func(c core.IConnection) bool {
+			if role, ok := c.GetMeta(core.MetaRoleKey); ok {
+				if s, ok2 := role.(string); ok2 && s == core.RoleParent {
+					return true
+				}
+			}
+			msg := message{Action: actionPermsInvalidate, Data: raw}
+			body, _ := json.Marshal(msg)
+			hdr := (&header.HeaderTcp{}).WithMajor(header.MajorCmd).WithSubProto(2).WithSourceID(srv.NodeID()).WithTargetID(0)
+			_ = srv.Send(ctx, c.ID(), hdr, body)
+			return true
+		})
+	}
+}
+
+// auth/permission helpers
+func (h *LoginHandler) loadAuthConfig(cfg core.IConfig) {
+	if cfg == nil {
+		return
+	}
+	if raw, ok := cfg.Get(coreconfig.KeyAuthDefaultRole); ok && strings.TrimSpace(raw) != "" {
+		h.defaultRole = strings.TrimSpace(raw)
+	}
+	if raw, ok := cfg.Get(coreconfig.KeyAuthDefaultPerms); ok {
+		h.defaultPerms = parseList(raw)
+	}
+	if raw, ok := cfg.Get(coreconfig.KeyAuthNodeRoles); ok {
+		h.nodeRoles = parseNodeRoles(raw)
+	}
+	if raw, ok := cfg.Get(coreconfig.KeyAuthRolePerms); ok {
+		h.rolePerms = parseRolePerms(raw)
+	}
+}
+
+func (h *LoginHandler) resolveRole(nodeID uint32) string {
+	if nodeID != 0 {
+		if r, ok := h.nodeRoles[nodeID]; ok && strings.TrimSpace(r) != "" {
+			return strings.TrimSpace(r)
+		}
+	}
+	return h.defaultRole
+}
+
+func (h *LoginHandler) resolvePerms(nodeID uint32) []string {
+	role := h.resolveRole(nodeID)
+	if perms, ok := h.rolePerms[role]; ok {
+		return cloneSlice(perms)
+	}
+	return cloneSlice(h.defaultPerms)
+}
+
+func (h *LoginHandler) resolveRolePerms(nodeID uint32) (string, []string) {
+	return h.resolveRole(nodeID), h.resolvePerms(nodeID)
+}
+
+func (h *LoginHandler) applyRolePerms(deviceID string, nodeID uint32, role string, perms []string, conn core.IConnection) {
+	if role == "" && len(perms) == 0 {
+		return
+	}
+	h.mu.Lock()
+	rec, ok := h.whitelist[deviceID]
+	if ok && rec.NodeID == nodeID {
+		if role != "" {
+			rec.Role = role
+		}
+		if perms != nil {
+			rec.Perms = cloneSlice(perms)
+		}
+		h.whitelist[deviceID] = rec
+	}
+	h.mu.Unlock()
+	if conn != nil {
+		if role != "" {
+			conn.SetMeta("role", role)
+		}
+		if perms != nil {
+			conn.SetMeta("perms", cloneSlice(perms))
+		}
+	}
+}
+
+func (h *LoginHandler) lookupByNode(nodeID uint32) (role string, perms []string, ok bool) {
+	h.mu.RLock()
+	for _, rec := range h.whitelist {
+		if rec.NodeID == nodeID {
+			role = rec.Role
+			perms = cloneSlice(rec.Perms)
+			ok = true
+			break
+		}
+	}
+	h.mu.RUnlock()
+	if ok && role != "" {
+		return role, perms, true
+	}
+	role = h.resolveRole(nodeID)
+	perms = h.resolvePerms(nodeID)
+	if role == "" && len(perms) == 0 {
+		return "", nil, false
+	}
+	return role, perms, true
+}
+
+func (h *LoginHandler) listRolePerms() []rolePermEntry {
+	seen := make(map[uint32]bool)
+	h.mu.RLock()
+	for _, rec := range h.whitelist {
+		if rec.NodeID == 0 {
+			continue
+		}
+		seen[rec.NodeID] = true
+	}
+	h.mu.RUnlock()
+
+	entries := make([]rolePermEntry, 0, len(seen)+len(h.nodeRoles))
+	for nid := range seen {
+		role, perms, ok := h.lookupByNode(nid)
+		if !ok {
+			continue
+		}
+		entries = append(entries, rolePermEntry{NodeID: nid, Role: role, Perms: perms})
+	}
+	for nid, role := range h.nodeRoles {
+		if seen[nid] {
+			continue
+		}
+		perms := h.resolvePerms(nid)
+		entries = append(entries, rolePermEntry{NodeID: nid, Role: role, Perms: perms})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].NodeID < entries[j].NodeID })
+	return entries
+}
+
+func (h *LoginHandler) invalidateCache(nodeIDs []uint32) {
+	targets := make(map[uint32]bool)
+	for _, id := range nodeIDs {
+		if id != 0 {
+			targets[id] = true
+		}
+	}
+	h.mu.Lock()
+	if len(targets) == 0 {
+		for k, rec := range h.whitelist {
+			rec.Role = ""
+			rec.Perms = nil
+			h.whitelist[k] = rec
+		}
+	} else {
+		for k, rec := range h.whitelist {
+			if targets[rec.NodeID] {
+				rec.Role = ""
+				rec.Perms = nil
+				h.whitelist[k] = rec
+			}
+		}
+	}
+	h.mu.Unlock()
+}
+
+func parseList(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func parseNodeRoles(raw string) map[uint32]string {
+	m := make(map[uint32]string)
+	pairs := strings.Split(raw, ";")
+	for _, p := range pairs {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		kv := strings.SplitN(p, ":", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		id, err1 := strconv.ParseUint(strings.TrimSpace(kv[0]), 10, 32)
+		role := strings.TrimSpace(kv[1])
+		if err1 == nil && role != "" {
+			m[uint32(id)] = role
+		}
+	}
+	return m
+}
+
+func parseRolePerms(raw string) map[string][]string {
+	m := make(map[string][]string)
+	pairs := strings.Split(raw, ";")
+	for _, p := range pairs {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		kv := strings.SplitN(p, ":", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		role := strings.TrimSpace(kv[0])
+		if role == "" {
+			continue
+		}
+		m[role] = parseList(kv[1])
+	}
+	return m
+}
+
+func cloneSlice[T any](src []T) []T {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]T, len(src))
+	copy(out, src)
+	return out
 }
 
 // Errors placeholder

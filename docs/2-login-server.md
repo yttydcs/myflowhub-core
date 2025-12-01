@@ -57,6 +57,7 @@
   - `root.priv_token=<与 Root 一致>`
   - `login.mode=authority`
   - Postgres DSN：`db.dsn=postgres://user:pass@host:port/dbname?sslmode=disable`
+  - 角色/权限配置（可选，默认为 role=node、perms 空）：`auth.default_role`、`auth.default_perms`（逗号分隔）、`auth.node_roles`（如 `1:admin;2:node`）、`auth.role_perms`（如 `admin:p1,p2;node:p3`）
 - 子 Hub：
   - 只需配置 parent 链路，其他跟随 Root 的 default forward 路由。
 

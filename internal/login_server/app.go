@@ -96,7 +96,7 @@ func (a *App) initServer() error {
 	if err != nil {
 		return err
 	}
-	if err := dispatcher.RegisterHandler(NewAuthorityHandler(a.store, a.log)); err != nil {
+	if err := dispatcher.RegisterHandler(NewAuthorityHandlerWithConfig(a.store, cfgMap, a.log)); err != nil {
 		return err
 	}
 	dispatcher.RegisterDefaultHandler(handler.NewDefaultForwardHandler(cfgMap, a.log))

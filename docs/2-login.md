@@ -3,7 +3,7 @@ Login/Register 协议（SubProto=2，P2P 统一 action+data）
 
 基本约定
 --------
-- 所有消息（请求/响应）统一格式：`{"action": "<name>", "data": {...}}`，状态码放在 data 内；响应 action = `<request_action>_resp`。
+- 所有消息（请求/响应）统一格式：`{"action": "<name>", "data": {...}}`，状态码放在 data 内；响应 action = `<request_action>_resp`。登录/认证成功时响应附带 `role`（单值）与 `perms`（字符串数组）；未找到节点则返回空 `role/perms`。
 - 未登录设备 `SourceID=0`；仅子协议 2 在未登录状态放行，其余 `SourceID=0` 帧直接丢弃。
 - 注册必须由直连 Hub 代发（携带 device_id）为 assist_register 上送权威。
 - 权威节点选择：配置指定权威 nodeID 优先；否则有父则默认父为权威（逐级可达祖先）；无父则本级处理。
@@ -31,12 +31,17 @@ Login/Register 协议（SubProto=2，P2P 统一 action+data）
 - `revoke`: `{ "device_id": "...", "node_id": N, "credential": "..." }`
 - `assist_query_credential`（可选）: `{ "device_id": "...", "node_id": N }`
 - `offline` / `assist_offline`: `{ "device_id": "...", "node_id": N, "reason": "optional" }`
+- `get_perms`（新）: `{ "node_id": N }` 查询指定节点角色/权限
+- `list_roles`（新）: 无 data，查询已知节点角色/权限列表
+- `perms_invalidate`（新）: `{ "node_ids": [N1, N2], "reason": "optional" }` 权限失效通知（node_ids 为空表示全量）
 
 ### 响应 / data 字段（action = `<req>_resp`）
-- `register_resp` / `assist_register_resp`: `{ "code": 1|err, "msg": "...", "device_id": "...", "node_id": N, "credential": "..." }`
-- `login_resp` / `assist_login_resp`: `{ "code": 1|err, "msg": "...", "device_id": "...", "node_id": N, "credential": "..." }`
+- `register_resp` / `assist_register_resp`: `{ "code": 1|err, "msg": "...", "device_id": "...", "node_id": N, "credential": "...", "role": "...", "perms": ["..."] }`
+- `login_resp` / `assist_login_resp`: `{ "code": 1|err, "msg": "...", "device_id": "...", "node_id": N, "credential": "...", "role": "...", "perms": ["..."] }`
 - `revoke_resp`: `{ "code": 1|err, "msg": "...", "device_id": "...", "node_id": N }`
 - `assist_query_credential_resp`: `{ "code": 1|err, "msg": "...", "device_id": "...", "node_id": N, "credential": "..." }`
+- `get_perms_resp`（新）: `{ "code": 1|err, "msg": "...", "node_id": N, "role": "...", "perms": ["..."] }`
+- `list_roles_resp`（新）: `{ "code": 1|err, "msg": "...", "roles": [ { "node_id": N, "role": "...", "perms": ["..."] }, ... ] }`
 - `offline_resp` / `assist_offline_resp`: `{ "code": 1|err, "msg": "...", "device_id": "...", "node_id": N }`
 
 流程
@@ -54,12 +59,25 @@ Login/Register 协议（SubProto=2，P2P 统一 action+data）
 - 凭证仅本地验证；父链主要路由 assist*/revoke/offline/query。
 - 权威选择：配置优先；否则默认父；无父则本级。
 
+权限失效通知（perms_invalidate）
+------------------------------
+- 动作：`perms_invalidate`，data: `{ "node_ids": [N1, N2], "reason": "optional" }`；`node_ids` 为空表示全量失效。
+- 处理：各 Hub 清空对应节点的 role/perms 缓存；如需，可向子节点继续广播（target=0，不回父）。
+
 错误码建议（data.code/msg）
 --------------------------
 - 1：成功
 - 登录/注册失败：4001 未注册/凭证不匹配；4002 无法访问权威/协助失败；4500 内部错误。
 - 撤销失败：4401 未找到白名单；4402 凭证不匹配/已更新；4500 内部错误。
 - 下线失败：4701 未找到索引；4700 内部错误。
+- 权限相关：4404 未找到节点/权限；权限不足建议返回 403。
+
+配置键（角色/权限）
+------------------
+- `auth.default_role`：默认角色名，默认 `node`。
+- `auth.default_perms`：默认权限列表（逗号分隔），默认空。
+- `auth.node_roles`：静态 node_id→role 映射，如 `1:admin;2:node`。
+- `auth.role_perms`：角色→权限列表映射，如 `admin:p1,p2;node:p3`。
 
 示例
 ----

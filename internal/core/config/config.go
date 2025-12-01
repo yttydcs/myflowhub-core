@@ -16,6 +16,10 @@ const (
 	KeyProcChannelCount     = "process.channel_count"
 	KeyProcWorkersPerChan   = "process.workers_per_channel"
 	KeyProcChannelBuffer    = "process.channel_buffer"
+	KeyAuthDefaultRole      = "auth.default_role"
+	KeyAuthDefaultPerms     = "auth.default_perms"
+	KeyAuthNodeRoles        = "auth.node_roles" // 格式：1:admin;2:node
+	KeyAuthRolePerms        = "auth.role_perms" // 格式：admin:p1,p2;node:p3
 	KeySendChannelCount     = "send.channel_count"
 	KeySendWorkersPerChan   = "send.workers_per_channel"
 	KeySendChannelBuffer    = "send.channel_buffer"
@@ -40,6 +44,10 @@ func NewMap(data map[string]string) *MapConfig {
 	ensureDefault(mc.data, KeyProcChannelCount, "1")
 	ensureDefault(mc.data, KeyProcWorkersPerChan, "1")
 	ensureDefault(mc.data, KeyProcChannelBuffer, "64")
+	ensureDefault(mc.data, KeyAuthDefaultRole, "node")
+	ensureDefault(mc.data, KeyAuthDefaultPerms, "")
+	ensureDefault(mc.data, KeyAuthNodeRoles, "")
+	ensureDefault(mc.data, KeyAuthRolePerms, "")
 	ensureDefault(mc.data, KeySendChannelCount, "1")
 	ensureDefault(mc.data, KeySendWorkersPerChan, "1")
 	ensureDefault(mc.data, KeySendChannelBuffer, "64")
