@@ -213,6 +213,13 @@ func (p *DispatcherProcess) route(evt dispatchEvent) {
 		return
 	}
 
+	if sourceMismatch(handler, evt.conn, evt.hdr) {
+		if p.log != nil {
+			p.log.Warn("drop frame due to source mismatch", "subproto", sub, "conn", evt.conn.ID(), "hdr_source", evt.hdr.SourceID(), "meta_node", extractNodeID(evt.conn))
+		}
+		return
+	}
+
 	cont := p.preRoute(evt.ctx, evt.conn, evt.hdr, evt.payload)
 	if cont {
 		p.callHandler(evt.ctx, handler, evt.conn, evt.hdr, evt.payload)
@@ -245,9 +252,30 @@ func (p *DispatcherProcess) getFallback() core.ISubProcess {
 	return fb
 }
 
+func sourceMismatch(h core.ISubProcess, conn core.IConnection, hdr core.IHeader) bool {
+	if h == nil || conn == nil || hdr == nil {
+		return false
+	}
+	if opt, ok := h.(SourceCheckOpt); ok && opt.AllowSourceMismatch() {
+		return false
+	}
+	metaNode := extractNodeID(conn)
+	// 未绑定 nodeID 视为未登录，拒绝处理（登录类 handler 可通过 AllowSourceMismatch 放行）
+	if metaNode == 0 {
+		return true
+	}
+	return hdr.SourceID() != metaNode
+}
+
 // CmdInterceptable 可选接口：声明 handler 是否需要在 Cmd 帧目标非本地时仍本地处理一次。
 type CmdInterceptable interface {
 	AcceptCmd() bool
+}
+
+// SourceCheckOpt 可选接口：声明是否允许 SourceID 与连接元数据的 nodeID 不一致。
+// 默认不允许，返回 true 表示跳过校验（例如登录协议需要在未绑定 nodeID 前工作）。
+type SourceCheckOpt interface {
+	AllowSourceMismatch() bool
 }
 
 func shouldInterceptCmd(h core.ISubProcess, hdr core.IHeader) bool {
