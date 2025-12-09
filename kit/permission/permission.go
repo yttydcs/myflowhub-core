@@ -14,6 +14,7 @@ const (
 	Wildcard      = "*"
 	AuthRevoke    = "auth.revoke"
 	VarPrivateSet = "var.private_set"
+	VarRevoke     = "var.revoke"
 )
 
 // Snapshot captures the exported permission state for syncing.
