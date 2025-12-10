@@ -45,6 +45,10 @@ type IConfig interface {
 	Get(key string) (string, bool)
 	// Merge 将其他配置的键值覆盖到当前配置，返回合并结果
 	Merge(other IConfig) IConfig
+	// Set 运行期设置配置项（可选实现）
+	Set(key, val string)
+	// Keys 返回全部配置键（可选实现）
+	Keys() []string
 }
 
 // IServer 服务接口：用于启动/停止服务，并持有核心组件。

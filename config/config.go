@@ -1,6 +1,7 @@
 package config
 
 import (
+	"sort"
 	"sync"
 
 	core "github.com/yttydcs/myflowhub-core"
@@ -102,4 +103,16 @@ func (m *MapConfig) Merge(other core.IConfig) core.IConfig {
 	}
 	// Unable to enumerate other implementations; return as is.
 	return m
+}
+
+// Keys 返回当前存储的全部配置键（有序）。
+func (m *MapConfig) Keys() []string {
+	m.mu.RLock()
+	keys := make([]string, 0, len(m.data))
+	for k := range m.data {
+		keys = append(keys, k)
+	}
+	m.mu.RUnlock()
+	sort.Strings(keys)
+	return keys
 }
