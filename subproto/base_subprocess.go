@@ -2,6 +2,7 @@ package subproto
 
 import (
 	"context"
+	"strings"
 
 	core "github.com/yttydcs/myflowhub-core"
 )
@@ -24,3 +25,47 @@ func (BaseSubProcess) AcceptCmd() bool { return false }
 
 // 默认不允许 Source 与连接元数据不一致。
 func (BaseSubProcess) AllowSourceMismatch() bool { return false }
+
+// ActionBaseSubProcess 扩展 BaseSubProcess，内置 action 注册表与注册方法。
+// 适用于 action+data 模式的子协议处理器。
+type ActionBaseSubProcess struct {
+	BaseSubProcess
+	Actions map[string]core.SubProcessAction
+}
+
+// ResetActions 初始化或清空内置 action 表。
+func (a *ActionBaseSubProcess) ResetActions() {
+	a.Actions = make(map[string]core.SubProcessAction)
+}
+
+// RemoveAction 按名称移除已注册的 action（名称大小写不敏感）。
+func (a *ActionBaseSubProcess) RemoveAction(name string) {
+	if a == nil || len(a.Actions) == 0 {
+		return
+	}
+	key := strings.ToLower(strings.TrimSpace(name))
+	if key == "" {
+		return
+	}
+	delete(a.Actions, key)
+}
+
+// RegisterAction 按名称注册 action，名称统一为小写键。
+func (a *ActionBaseSubProcess) RegisterAction(act core.SubProcessAction) {
+	if act == nil || act.Name() == "" {
+		return
+	}
+	if a.Actions == nil {
+		a.Actions = make(map[string]core.SubProcessAction)
+	}
+	a.Actions[strings.ToLower(act.Name())] = act
+}
+
+// LookupAction 根据名称查找已注册的 action（名称大小写不敏感）。
+func (a *ActionBaseSubProcess) LookupAction(name string) (core.SubProcessAction, bool) {
+	if a == nil || len(a.Actions) == 0 {
+		return nil, false
+	}
+	act, ok := a.Actions[strings.ToLower(strings.TrimSpace(name))]
+	return act, ok
+}
