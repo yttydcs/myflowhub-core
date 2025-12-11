@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+
+	"github.com/yttydcs/myflowhub-core/eventbus"
 )
 
 // IHeader 定义协议头的通用接口：
@@ -70,6 +72,8 @@ type IServer interface {
 	NodeID() uint32
 	// UpdateNodeID 运行期更新当前节点 ID
 	UpdateNodeID(uint32)
+	// EventBus 返回事件总线实例
+	EventBus() eventbus.IBus
 	// Send 将 header+payload 发送给指定连接，并触发处理钩子
 	Send(ctx context.Context, connID string, hdr IHeader, payload []byte) error
 }

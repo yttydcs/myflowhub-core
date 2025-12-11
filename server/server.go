@@ -12,6 +12,7 @@ import (
 
 	core "github.com/yttydcs/myflowhub-core"
 	coreconfig "github.com/yttydcs/myflowhub-core/config"
+	"github.com/yttydcs/myflowhub-core/eventbus"
 	"github.com/yttydcs/myflowhub-core/listener/tcp_listener"
 	"github.com/yttydcs/myflowhub-core/process"
 	"github.com/yttydcs/myflowhub-core/reader"
@@ -83,6 +84,8 @@ type Server struct {
 
 	parent *parentState
 
+	eb eventbus.IBus
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -137,6 +140,7 @@ func New(opts Options) (*Server, error) {
 		rFac:   opts.ReaderFactory,
 		sender: sendDisp,
 		parent: parent,
+		eb:     eventbus.New(eventbus.Options{}),
 	}
 	s.nodeID.Store(opts.NodeID)
 	return s, nil
@@ -226,6 +230,9 @@ func (s *Server) Stop(ctx context.Context) error {
 		s.sender.Shutdown()
 	}
 	_ = s.lst.Close()
+	if s.eb != nil {
+		s.eb.Close()
+	}
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
@@ -244,6 +251,7 @@ func (s *Server) ConnManager() core.IConnectionManager { return s.cm }
 func (s *Server) Process() core.IProcess               { return s.proc }
 func (s *Server) HeaderCodec() core.IHeaderCodec       { return s.codec }
 func (s *Server) NodeID() uint32                       { return s.nodeID.Load() }
+func (s *Server) EventBus() eventbus.IBus              { return s.eb }
 func (s *Server) UpdateNodeID(id uint32) {
 	if id == 0 {
 		return
