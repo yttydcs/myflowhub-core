@@ -15,6 +15,7 @@ const (
 	AuthRevoke    = "auth.revoke"
 	VarPrivateSet = "var.private_set"
 	VarRevoke     = "var.revoke"
+	VarSubscribe  = "var.subscribe"
 )
 
 // Snapshot captures the exported permission state for syncing.

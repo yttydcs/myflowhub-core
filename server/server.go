@@ -175,6 +175,12 @@ func (s *Server) Start(ctx context.Context) error {
 		if s.parent != nil {
 			s.parent.notifyDown(c.ID())
 		}
+		if s.eb != nil {
+			_ = s.eb.Publish(core.WithServerContext(s.ctx, s), "conn.closed", map[string]any{
+				"conn_id": c.ID(),
+				"node_id": extractConnNodeID(c),
+			}, nil)
+		}
 	}})
 	s.start = true
 	if s.parent.hasParent() {
@@ -331,6 +337,29 @@ func (s *Server) runParentLink(ctx context.Context) {
 			time.Sleep(retry)
 		}
 	}
+}
+
+func extractConnNodeID(c core.IConnection) uint32 {
+	if c == nil {
+		return 0
+	}
+	if v, ok := c.GetMeta("nodeID"); ok {
+		switch vv := v.(type) {
+		case uint32:
+			return vv
+		case uint64:
+			return uint32(vv)
+		case int:
+			if vv >= 0 {
+				return uint32(vv)
+			}
+		case int64:
+			if vv >= 0 {
+				return uint32(vv)
+			}
+		}
+	}
+	return 0
 }
 
 func buildParentState(cfg core.IConfig) *parentState {
