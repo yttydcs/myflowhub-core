@@ -77,9 +77,14 @@ func (p *PreRoutingProcess) PreRoute(ctx context.Context, conn core.IConnection,
 	if hdr.SubProto() == 2 {
 		return true
 	}
+
+	srcIsParent := isParentConn(conn)
+	// file 协议控制帧（payload[0]==0x01）需要进入 handler 做逐级判权/转交；来自子连接时不做自动转发。
+	if !srcIsParent && hdr.SubProto() == 5 && len(payload) > 0 && payload[0] == 0x01 {
+		return true
+	}
 	target := hdr.TargetID()
 	local := srv.NodeID()
-	srcIsParent := isParentConn(conn)
 
 	// 广播：只向子节点下行，不向父节点上行。
 	if target == 0 {

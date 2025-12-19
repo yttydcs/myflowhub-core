@@ -216,7 +216,7 @@ func (p *DispatcherProcess) route(evt dispatchEvent) {
 		return
 	}
 
-	if sourceMismatch(handler, evt.conn, evt.hdr) {
+	if sourceMismatch(evt.ctx, handler, evt.conn, evt.hdr) {
 		if p.log != nil {
 			p.log.Warn("drop frame due to source mismatch", "subproto", sub, "conn", evt.conn.ID(), "hdr_source", evt.hdr.SourceID(), "meta_node", extractNodeID(evt.conn))
 		}
@@ -255,7 +255,7 @@ func (p *DispatcherProcess) getFallback() core.ISubProcess {
 	return fb
 }
 
-func sourceMismatch(h core.ISubProcess, conn core.IConnection, hdr core.IHeader) bool {
+func sourceMismatch(ctx context.Context, h core.ISubProcess, conn core.IConnection, hdr core.IHeader) bool {
 	if h == nil || conn == nil || hdr == nil {
 		return false
 	}
@@ -267,7 +267,23 @@ func sourceMismatch(h core.ISubProcess, conn core.IConnection, hdr core.IHeader)
 	if metaNode == 0 {
 		return true
 	}
-	return hdr.SourceID() != metaNode
+	src := hdr.SourceID()
+	if src == metaNode {
+		return false
+	}
+	// 父连接免检：子节点无条件信任父节点（父节点可代表其子树下发/转发帧）
+	if isParentConn(conn) {
+		return false
+	}
+	srv := core.ServerFromContext(ctx)
+	if srv == nil || srv.ConnManager() == nil {
+		return true
+	}
+	// 子连接放行“自身或其后代”：依赖路由索引将后代 nodeID 映射到该 child 连接。
+	if mapped, ok := srv.ConnManager().GetByNode(src); ok && mapped != nil {
+		return mapped.ID() != conn.ID()
+	}
+	return true
 }
 
 func shouldInterceptCmd(h core.ISubProcess, hdr core.IHeader) bool {
