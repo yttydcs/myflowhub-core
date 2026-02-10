@@ -61,7 +61,7 @@ func main() {
 
 ## HeaderTcp 协议（概览）
 
-- 24 字节固定头 + N 字节 payload  
+- 32 字节固定头（HeaderTcp v2）+ N 字节 payload  
 - 字段：TypeFmt(major+subproto)、Flags、MsgID、Source、Target、Timestamp、PayloadLen、Reserved  
 - 大类：0=OK、1=Err、2=Msg、3=Cmd
 

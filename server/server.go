@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"log/slog"
 	"net"
@@ -13,6 +15,7 @@ import (
 	core "github.com/yttydcs/myflowhub-core"
 	coreconfig "github.com/yttydcs/myflowhub-core/config"
 	"github.com/yttydcs/myflowhub-core/eventbus"
+	"github.com/yttydcs/myflowhub-core/header"
 	"github.com/yttydcs/myflowhub-core/listener/tcp_listener"
 	"github.com/yttydcs/myflowhub-core/process"
 	"github.com/yttydcs/myflowhub-core/reader"
@@ -91,6 +94,25 @@ type Server struct {
 	wg     sync.WaitGroup
 	mu     sync.Mutex
 	start  bool
+}
+
+var traceSeq atomic.Uint32
+var traceSeqInit sync.Once
+
+func nextTraceID() uint32 {
+	traceSeqInit.Do(func() {
+		var seed [4]byte
+		if _, err := rand.Read(seed[:]); err != nil {
+			traceSeq.Store(uint32(time.Now().UnixNano()))
+			return
+		}
+		traceSeq.Store(binary.BigEndian.Uint32(seed[:]))
+	})
+	v := traceSeq.Add(1)
+	if v == 0 {
+		v = traceSeq.Add(1)
+	}
+	return v
 }
 
 // New 构建 Server。
@@ -265,9 +287,19 @@ func (s *Server) UpdateNodeID(id uint32) {
 	s.nodeID.Store(id)
 }
 func (s *Server) Send(ctx context.Context, connID string, hdr core.IHeader, payload []byte) error {
+	if hdr == nil {
+		return errors.New("header required")
+	}
 	conn, ok := s.cm.Get(connID)
 	if !ok {
 		return errors.New("conn not found")
+	}
+	// 安全默认：若发送侧未设置则自动补齐。
+	if hdr.GetHopLimit() == 0 {
+		hdr.WithHopLimit(header.DefaultHopLimit)
+	}
+	if hdr.GetTraceID() == 0 {
+		hdr.WithTraceID(nextTraceID())
 	}
 	if err := s.proc.OnSend(ctx, conn, hdr, payload); err != nil {
 		return err

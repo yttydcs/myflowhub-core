@@ -20,10 +20,12 @@ type IHeader interface {
 	SourceID() uint32
 	TargetID() uint32
 	GetFlags() uint8
+	GetHopLimit() uint8
+	GetRouteFlags() uint8
 	GetMsgID() uint32
+	GetTraceID() uint32
 	GetTimestamp() uint32
 	PayloadLength() uint32
-	GetReserved() uint16
 
 	// 修改方法（返回 IHeader 以支持链式调用）
 	WithMajor(uint8) IHeader
@@ -31,10 +33,12 @@ type IHeader interface {
 	WithSourceID(uint32) IHeader
 	WithTargetID(uint32) IHeader
 	WithFlags(uint8) IHeader
+	WithHopLimit(uint8) IHeader
+	WithRouteFlags(uint8) IHeader
 	WithMsgID(uint32) IHeader
+	WithTraceID(uint32) IHeader
 	WithTimestamp(uint32) IHeader
 	WithPayloadLength(uint32) IHeader
-	WithReserved(uint16) IHeader
 
 	// Clone 返回该头部的深拷贝
 	Clone() IHeader

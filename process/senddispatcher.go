@@ -377,18 +377,26 @@ func writeTCPFrame(conn net.Conn, _ header.HeaderTcpCodec, hdr core.IHeader, pay
 	if tcpHdr == nil {
 		return errNilCodec
 	}
+	if tcpHdr.HopLimit == 0 {
+		tcpHdr.HopLimit = header.DefaultHopLimit
+	}
 	if uint32(len(payload)) != tcpHdr.PayloadLen {
 		tcpHdr.PayloadLen = uint32(len(payload))
 	}
-	buf := make([]byte, 24)
-	buf[0] = tcpHdr.TypeFmt
-	buf[1] = tcpHdr.Flags
-	binary.BigEndian.PutUint32(buf[2:6], tcpHdr.MsgID)
-	binary.BigEndian.PutUint32(buf[6:10], tcpHdr.Source)
-	binary.BigEndian.PutUint32(buf[10:14], tcpHdr.Target)
-	binary.BigEndian.PutUint32(buf[14:18], tcpHdr.Timestamp)
-	binary.BigEndian.PutUint32(buf[18:22], tcpHdr.PayloadLen)
-	binary.BigEndian.PutUint16(buf[22:24], tcpHdr.Reserved)
+	buf := make([]byte, 32)
+	binary.BigEndian.PutUint16(buf[0:2], header.HeaderTcpMagicV2)
+	buf[2] = header.HeaderTcpVersionV2
+	buf[3] = 32 // hdr_len
+	buf[4] = tcpHdr.TypeFmt
+	buf[5] = tcpHdr.Flags
+	buf[6] = tcpHdr.HopLimit
+	buf[7] = tcpHdr.RouteFlags
+	binary.BigEndian.PutUint32(buf[8:12], tcpHdr.MsgID)
+	binary.BigEndian.PutUint32(buf[12:16], tcpHdr.Source)
+	binary.BigEndian.PutUint32(buf[16:20], tcpHdr.Target)
+	binary.BigEndian.PutUint32(buf[20:24], tcpHdr.TraceID)
+	binary.BigEndian.PutUint32(buf[24:28], tcpHdr.Timestamp)
+	binary.BigEndian.PutUint32(buf[28:32], tcpHdr.PayloadLen)
 	if len(payload) == 0 {
 		_, err := conn.Write(buf)
 		return err

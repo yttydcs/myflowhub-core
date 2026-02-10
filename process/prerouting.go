@@ -6,6 +6,7 @@ import (
 
 	core "github.com/yttydcs/myflowhub-core"
 	coreconfig "github.com/yttydcs/myflowhub-core/config"
+	"github.com/yttydcs/myflowhub-core/header"
 )
 
 // PreRoutingProcess 属于核心层：在子协议分发前执行基础路由逻辑。
@@ -78,17 +79,22 @@ func (p *PreRoutingProcess) PreRoute(ctx context.Context, conn core.IConnection,
 		return true
 	}
 
-	srcIsParent := isParentConn(conn)
-	// file 协议控制帧（payload[0]==0x01）需要进入 handler 做逐级判权/转交；来自子连接时不做自动转发。
-	if !srcIsParent && hdr.SubProto() == 5 && len(payload) > 0 && payload[0] == 0x01 {
+	// 统一规则：控制面（MajorCmd）必须进入 handler（逐跳可见），不在 Core 做自动转发/广播。
+	if hdr.Major() == header.MajorCmd {
 		return true
 	}
+	srcIsParent := isParentConn(conn)
 	target := hdr.TargetID()
 	local := srv.NodeID()
 
 	// 广播：只向子节点下行，不向父节点上行。
 	if target == 0 {
-		p.handleBroadcast(ctx, srv, conn, hdr, payload)
+		fwdHdr, ok := p.cloneForForward(hdr)
+		if !ok {
+			p.log.Warn("广播 hop_limit 耗尽，丢弃", "subproto", hdr.SubProto(), "source", hdr.SourceID())
+			return false
+		}
+		p.handleBroadcast(ctx, srv, conn, fwdHdr, payload)
 		return false
 	}
 
@@ -98,10 +104,15 @@ func (p *PreRoutingProcess) PreRoute(ctx context.Context, conn core.IConnection,
 			p.log.Debug("转发功能已禁用，丢弃跨节点消息", "target", target, "local", local)
 			return false
 		}
-		if p.forwardToLocalChild(ctx, srv, hdr, payload, target) {
+		fwdHdr, ok := p.cloneForForward(hdr)
+		if !ok {
+			p.log.Warn("转发 hop_limit 耗尽，丢弃", "target", target, "local", local, "subproto", hdr.SubProto(), "source", hdr.SourceID())
 			return false
 		}
-		p.forwardToParent(ctx, srv, hdr.Clone(), payload, srcIsParent, target)
+		if p.forwardToLocalChild(ctx, srv, fwdHdr, payload, target) {
+			return false
+		}
+		p.forwardToParent(ctx, srv, fwdHdr, payload, srcIsParent, target)
 		return false
 	}
 	// 本地：继续 dispatcher 的后续处理
@@ -119,7 +130,7 @@ func (p *PreRoutingProcess) forwardOrDrop(sendFn func() error) {
 
 func (p *PreRoutingProcess) handleBroadcast(ctx context.Context, srv core.IServer, src core.IConnection, hdr core.IHeader, payload []byte) {
 	p.log.Info("广播消息", "from", hdr.SourceID(), "subproto", hdr.SubProto())
-	baseHdr := hdr.Clone()
+	baseHdr := hdr
 	srv.ConnManager().Range(func(c core.IConnection) bool {
 		if c.ID() == src.ID() {
 			return true
@@ -139,17 +150,16 @@ func (p *PreRoutingProcess) handleBroadcast(ctx context.Context, srv core.IServe
 }
 
 func (p *PreRoutingProcess) forwardToLocalChild(ctx context.Context, srv core.IServer, hdr core.IHeader, payload []byte, target uint32) bool {
-	forwardHdr := hdr.Clone()
 	if targetConn, ok := srv.ConnManager().GetByNode(target); ok {
 		p.forwardOrDrop(func() error {
-			return srv.Send(ctx, targetConn.ID(), forwardHdr.Clone(), payload)
+			return srv.Send(ctx, targetConn.ID(), hdr.Clone(), payload)
 		})
 		return true
 	}
 	var forwarded bool
 	srv.ConnManager().Range(func(c core.IConnection) bool {
 		if nid := extractNodeID(c); nid == target {
-			sendHdr := forwardHdr.Clone()
+			sendHdr := hdr.Clone()
 			p.forwardOrDrop(func() error {
 				return srv.Send(ctx, c.ID(), sendHdr, payload)
 			})
@@ -179,8 +189,20 @@ func (p *PreRoutingProcess) forwardToParent(ctx context.Context, srv core.IServe
 	p.log.Warn("目标节点未找到，丢弃", "target", target)
 }
 
-func extractServer(ctx context.Context) core.IServer {
-	return core.ServerFromContext(ctx)
+func (p *PreRoutingProcess) cloneForForward(hdr core.IHeader) (core.IHeader, bool) {
+	if hdr == nil {
+		return nil, false
+	}
+	clone := hdr.Clone()
+	hop := clone.GetHopLimit()
+	if hop == 0 {
+		hop = header.DefaultHopLimit
+	}
+	if hop <= 1 {
+		return nil, false
+	}
+	clone.WithHopLimit(hop - 1)
+	return clone, true
 }
 
 func isParentConn(c core.IConnection) bool {
