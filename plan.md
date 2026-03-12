@@ -1,187 +1,126 @@
-# Plan - Core：引入 Pipe 抽象 + MultiListener + Parent Dialer（为 RFCOMM 等多传输铺路）
+# Plan - Core：RFCOMM（Bluetooth Classic）Transport（字节流 Pipe）
 
 ## Workflow 信息
 - Repo：`MyFlowHub-Core`
-- 分支：`refactor/transport-pipe`
-- Worktree：`d:\project\MyFlowHub3\worktrees\refactor-transport-pipe\MyFlowHub-Core`
-- Base：`origin/master`
-- 关联仓库（同一 workflow）：
-  - `MyFlowHub-Server`：装配多 listener、父链路 endpoint
-  - `MyFlowHub-SubProto`：适配 `core.IConnection` 变更（主要是测试 stub/mock）
-- 参考：
-  - `d:\project\MyFlowHub3\target.md`
-  - `d:\project\MyFlowHub3\repos.md`
-  - `d:\project\MyFlowHub3\guide.md`（commit 信息中文）
+- 分支：`feat/bluetooth-rfcomm-transport`
+- Worktree：`d:\project\MyFlowHub3\worktrees\feat-bluetooth-rfcomm-transport\repo\MyFlowHub-Core`
+- Base：`master`（当前发布 tag：`v0.3.0`）
+- 关联仓库（同一特性分支名）：
+  - `MyFlowHub-Server`：装配 RFCOMM listener + parent dial
+  - `MyFlowHub-SDK`：支持 `bt+rfcomm://` 的 dial（可选）
+  - `MyFlowHub-Android`：Java/Kotlin 提供 Android RFCOMM Provider
 
 ## 背景 / 问题陈述（事实，可审计）
-- 目前 Core 的连接读写链路强依赖 `net.Conn`（例如 `IConnection.RawConn()`、`TCPReader`、`SendDispatcher` 写入优化路径）。
-- 该设计在“新增非 TCP 承载（例如 Bluetooth Classic RFCOMM）”时会遇到两类问题：
-  1) 某些平台/承载不易稳定地暴露为 `net.Conn`（或不支持 deadline 等能力）。
-  2) 上层期望“管理器持有管道（Pipe）”，内部按需解包（Header）并路由转发，避免把底层连接类型泄漏到业务层。
+- 项目目标：构建“虚拟网络”，可在多种承载（TCP / Bluetooth Classic RFCOMM 等）之上复用同一套 Header 编解码、路由与子协议。
+- 现状：
+  - Core 已完成 Pipe 抽象（`core.IPipe` + `IConnection.Pipe()`），Reader/SendDispatcher 已不强依赖 `net.Conn`。
+  - Server 已预留 `RFCOMMEnable/RFCOMMUUID` 配置与 CLI flag，但运行时仍返回 “not implemented”。
+- 需求：新增 RFCOMM（Bluetooth Classic）transport，要求：
+  - v1 走 RFCOMM/SPP 风格**字节流**；
+  - 支持 Windows / Linux / Android；
+  - 支持 `listen` 与 `dial`；
+  - 路由只要求解析 Header（按 header 路由），payload 仅按需解析；
+  - UUID-first（默认 MyFlowHub UUID），可选 channel 覆盖/兜底；
+  - 允许手工输入目标信息；未来需要预留“按设备名扫描/解析到 MAC”的扩展点；
+  - Android 默认 `secure=true`（已确认）。
 
 ## 目标
-1) **Pipe 抽象**：Core 以 `Pipe`（`io.ReadWriteCloser` 语义）作为连接底座，Reader/SendDispatcher 不再依赖 `net.Conn`。
-2) **多 Listener**：在 Core 提供可复用的 `MultiListener`（实现 `core.IListener`），支持同时启动多个协议 listener。
-3) **Parent Dialer 抽象**：Server 父链路拨号从硬编码 `net.Dial("tcp")` 改为可注入 dialer（为未来 BT dial 做准备）。
-4) **路由索引策略**：同一 `nodeID` 的“直连绑定”仅保留一条（后绑定覆盖；旧连接可被移除/关闭）；但“后代路由索引”仅覆盖映射，不主动关闭旧连接（避免误杀承载其他后代的 childConn）。
+1) 在 Core 提供 RFCOMM 的统一抽象与实现，使其在上层表现为 `core.IPipe` 字节流，并可包装成 `core.IConnection`。
+2) 提供可复用的 dial：供 Server parent-link、SDK client 侧复用。
+3) 提供 `core.IListener`：供 Server 装配为 listener（与 TCP 并存、可分别开关）。
+4) 预留未来扩展：按设备名解析/扫描到 MAC（本轮不实现扫描）。
 
 ## 非目标
-- 本仓不实现 RFCOMM 具体 listener/dialer（平台差异大，另起 workflow 在 Win/Android 落地）。
-- 不修改 wire：HeaderTcp v2 / Major 路由语义 / SubProto 值 / Action 名称 / JSON schema 均保持不变。
-- 不引入 payload 的通用业务解析（payload 仍以 `[]byte` 透传给 handler；仅 Header 用于路由/安全门禁）。
+- 不实现 BLE（GATT）与配对/Pin UI（平台 UI/权限差异大）。
+- 不改变 wire 协议：HeaderTcp 编解码、Major/SubProto 语义不改。
+- 不要求所有节点解析 payload；仅在需要时才解包。
 
-## 约束（边界）
-- 允许破坏性改动（为未来多协议与性能），但必须：
-  - 提供清晰的迁移路径与回滚点；
-  - 更新同 workflow 的 Server/SubProto 以通过集成测试。
-- listener 开关变更需重启 Hub 生效（运行期动态开关不在本轮）。
+## 关键接口与约定（v1）
+- ParentEndpoint / dial endpoint（跨仓统一）：
+  - `bt+rfcomm://<bdaddr>?uuid=<uuid>&channel=<1-30>&adapter=hci0&secure=true&name=<reserved>`
+  - 其中 `name` 为预留字段：v1 不实现扫描/解析，若传入则返回明确的 “not implemented” 错误。
+- Android 默认：`secure=true`；仍允许通过参数显式指定 `secure=false`（不推荐）。
 
 ## 验收标准
-- 本 workflow 的集成联调（通过 workflow-local `go.work`）满足：
-  - `MyFlowHub-Core`：`go test ./... -count=1 -p 1` 通过；
-  - `MyFlowHub-Server`：在同一 workspace 下可编译、可启动、最小冒烟链路不回退；
-  - `MyFlowHub-SubProto`：受影响的测试 stub/mock 已适配并可通过单测。
-- 不引入循环依赖（Core 仍不依赖 Server/Win/SDK）。
+- 代码侧（可自动化）：
+  - 本仓 `go test ./...` 通过（主机平台）。
+  - 端点解析/校验单测覆盖：UUID、bdaddr、channel、保留字段 name 等边界。
+  - 至少完成跨平台**可编译**验证（不要求本机跑真机蓝牙）：
+    - `GOOS=linux GOARCH=amd64 go test ./...`（编译通过即可）
+    - `GOOS=android GOARCH=arm64 go test ./...`（编译通过即可）
+- 行为侧（手工冒烟，依赖真实设备/系统环境）：
+  - Linux/Windows 任一端 listen，另一端 dial，能完成 MyFlowHub 的基本帧收发（至少能完成一条 Cmd/Resp 链路）。
+  - 失败时能输出可定位的错误信息（权限缺失/BlueZ 不可用/Provider 未注入等）。
+
+## 开发/联调方式（避免污染 go.mod）
+- 在 `d:\project\MyFlowHub3\worktrees\feat-bluetooth-rfcomm-transport\` 下维护 workflow-local `go.work`（后续任务创建），将 Core/Server/SDK/Android-hubmobile 同时加入，以便在不发布 tag 的情况下完成联调编译与测试。
+- 在准备合并到各仓 `main/master` 前，必须确保各仓 `GOWORK=off go test ./...` 仍可编译（如需要发布/升级版本，另在对应仓 workflow 内完成）。
 
 ## 3.1) 计划拆分（Checklist）
 
-### CORE0 - 归档旧 plan（已执行）
-- 目标：避免覆盖历史 plan，保留可审计回放。
-- 已执行：`git mv plan.md docs/plan_archive/plan_archive_2026-03-11_transport-pipe-prev.md`
-- 验收条件：归档文件存在且可阅读。
-- 回滚点：撤销该 `git mv`。
+### CORE-BT0 - 归档旧 plan（已执行）
+- 已执行：`git mv plan.md docs/plan_archive/plan_archive_2026-03-12_bluetooth-rfcomm-transport-core-prev.md`
 
-### CORE1 - 引入 Pipe 抽象并改造 `IConnection`
-**目标**
-- 在 Core 定义 `Pipe`（读写关闭）语义，并使 `IConnection` 以 Pipe 作为底座能力。
+### CORE-BT1 - RFCOMM 端点与配置建模（含校验与扩展点）
+- 目标：定义 endpoint 解析与 Options（UUID-first + channel override），并为未来 `name` 解析留接口。
+- 涉及模块/文件（预期）：
+  - `transport/rfcomm/*`（或同等目录，最终以实现为准）
+  - `transport/rfcomm/endpoint_test.go`
+- 验收条件：
+  - `go test ./...` 通过；
+  - `bt+rfcomm://` 的解析与参数校验覆盖边界。
+- 回滚点：revert 本任务提交。
 
-**涉及模块 / 文件（预期）**
-- `iface.go`（`IConnection`：新增 `Pipe()`；移除或降级 `RawConn()`）
-- `listener/tcp_listener/connection.go`（TCPConnection 适配 Pipe）
+### CORE-BT2 - RFCOMM Pipe/Connection 适配（IConnection + IPipe）
+- 目标：将平台连接统一包装为 `core.IPipe`，并提供 `core.IConnection` 实现（元数据/LocalAddr/RemoteAddr）。
+- 关注点（性能）：
+  - 避免无意义拷贝；优先复用缓冲（必要时在 Reader 侧引入 `bufio.Reader` 降低小读次数）。
+- 涉及模块/文件（预期）：
+  - `listener/rfcomm_listener/connection.go`（或 `transport/rfcomm/connection.go`）
+  - `iface.go`（仅在确有必要时，尽量不动核心接口）
+- 验收条件：最小可用 `IConnection` + `Pipe()` 可被现有 reader 解码链路复用。
+- 回滚点：revert。
 
-**设计要点**
-- `Pipe` 只要求 `io.ReadWriteCloser`；不强依赖 deadline（不同承载能力不同）。
-- `IConnection` 的 `Send/SendWithHeader` 仍作为“框架统一发送入口”；上层不直接写 Pipe。
+### CORE-BT3 - Linux 实现（BlueZ / D-Bus）
+- 目标：在 Linux 下实现 RFCOMM listen/dial（依赖 BlueZ + D-Bus）。
+- 涉及模块/文件（预期）：
+  - `transport/rfcomm/rfcomm_linux.go`（build tag）
+  - 可能新增依赖：`github.com/godbus/dbus/v5`（如采用自实现 D-Bus）
+- 验收条件：
+  - `GOOS=linux GOARCH=amd64 go test ./...` 编译通过；
+  - 错误信息清晰可定位（BlueZ 不存在/权限不足等）。
+- 回滚点：revert。
 
-**验收条件**
-- Core 编译通过；同 workflow 的 Server/SubProto 可适配通过编译。
+### CORE-BT4 - Windows 实现（AF_BTH / RFCOMM）
+- 目标：在 Windows 下实现 RFCOMM listen/dial（UUID-first + channel override）。
+- 涉及模块/文件（预期）：
+  - `transport/rfcomm/rfcomm_windows.go`（build tag）
+  - 可能新增依赖：`golang.org/x/sys/windows`
+- 验收条件：Windows 下 `go test ./...` 通过；dial/listen 具备可用错误路径与可观测性（日志/错误）。
+- 回滚点：revert。
 
-**测试点**
-- `go test ./... -count=1 -p 1`
+### CORE-BT5 - Android 接入点（Provider 注入 + 默认 secure）
+- 目标：Android 侧 Core 不直接依赖 Android Bluetooth API；通过“Java 实现 Go interface”的 Provider 注入实现 dial/listen。
+- 涉及模块/文件（预期）：
+  - `transport/rfcomm/rfcomm_android.go`（build tag）
+  - `transport/rfcomm/android_provider.go`（接口定义，需满足 gomobile bind 可用类型）
+- 验收条件：
+  - `GOOS=android GOARCH=arm64 go test ./...` 编译通过；
+  - 未注入 Provider 且启用 RFCOMM 时返回明确错误（可指导 Android 仓集成）。
+- 回滚点：revert。
 
-**回滚点**
-- revert 该提交。
+### CORE-BT6 - RFCOMM Listener（core.IListener）
+- 目标：提供 `listener/rfcomm_listener`（或等价包），可在 Server 中与 TCP 组合（MultiListener）。
+- 验收条件：接口满足 `core.IListener`；Close/ctx cancel 可可靠退出；Accept 异常处理不自旋。
+- 回滚点：revert。
 
-### CORE2 - Reader 改造：从 Pipe 解码帧（Header+Payload）
-**目标**
-- 将当前 `reader/tcp_reader.go` 改造为通用 stream reader（从 `conn.Pipe()` 读取并调用 `codec.Decode`）。
+### CORE-BT7 - Code Review（强制）
+- 逐项审查：需求覆盖/架构/性能风险/可读性一致性/可扩展性/稳定性与安全/测试覆盖。
 
-**涉及模块 / 文件（预期）**
-- `reader/tcp_reader.go`（重命名或保留文件名但语义改为 stream）
+### CORE-BT8 - 归档变更（强制）
+- 输出：`docs/change/2026-03-12_bluetooth-rfcomm-transport-core.md`
+- 必须标注：本特性为重大变更（跨平台新增 transport；涉及端点规范与连接抽象扩展）。
 
-**验收条件**
-- Server 侧收包处理不回退（OnReceive 正常触发）。
-
-**测试点**
-- Core 单测 + Server 集成最小测试（后续在 Server 仓计划中列）。
-
-**回滚点**
-- revert 该提交。
-
-### CORE3 - SendDispatcher 改造：写入 Pipe 并保留 HeaderTcp 低拷贝路径
-**目标**
-- 发送调度器不再依赖 `net.Conn`，改为写 `io.Writer`（来自 `conn.Pipe()`）。
-
-**涉及模块 / 文件（预期）**
-- `process/senddispatcher.go`
-
-**性能关键点**
-- HeaderTcp v2：继续使用 `net.Buffers{hdrBytes, payload}.WriteTo(writer)` 以减少拼接与拷贝。
-
-**验收条件**
-- Server 侧发送/转发仍可工作；并发写不出现帧交错（仍由 per-conn writer 串行保障）。
-
-**测试点**
-- `go test ./... -count=1 -p 1`
-
-**回滚点**
-- revert 该提交。
-
-### CORE4 - `MultiListener`：支持同时启动多个 listener
-**目标**
-- 提供一个 Core 可复用的多 listener 组合器，便于 Server 同时开启 TCP + 未来 RFCOMM。
-
-**涉及模块 / 文件（预期）**
-- `listener/multi_listener/listener.go`（新）
-
-**验收条件**
-- MultiListener 在任一子 listener 返回错误时能触发 Close 并尽快退出；
-- ctx cancel 时能关闭全部 listener 并退出。
-
-**测试点**
-- 最小单测：模拟两个 listener，一个返回错误，一个阻塞；断言 MultiListener 返回并关闭另一个。
-
-**回滚点**
-- revert 该提交。
-
-### CORE5 - Parent Dialer：父链路拨号可注入（为 BT dial 做准备）
-**目标**
-- 将 `server.Server` 的父链路拨号从硬编码 `net.Dial("tcp")` 改为可注入 dialer / dial 函数。
-
-**涉及模块 / 文件（预期）**
-- `server/server.go`
-- （可选）新增 `dialer/*` 包：默认 TCP dialer 实现
-
-**验收条件**
-- 默认行为不变：不配置时仍按 TCP 拨号父节点；
-- 配置 dialer 后可替换拨号实现（本轮不实现 BT dialer）。
-
-**测试点**
-- Server 单测或最小集成：注入一个 fake dialer，断言被调用。
-
-**回滚点**
-- revert 该提交。
-
-### CORE6 - ConnMgr：nodeIndex 冲突策略（直连仅保留一条）
-**目标**
-- 当 `nodeID` 的“直连绑定”（`nodeID == conn.meta(nodeID)`）发生冲突时：
-  - 采用“后绑定覆盖”；
-  - 旧直连连接从 manager 移除并关闭（避免同一 node 两条连接导致路由歧义）。
-- 当更新的是“后代路由索引”（`nodeID != conn.meta(nodeID)`）时：仅覆盖映射，不主动关闭旧连接。
-
-**涉及模块 / 文件（预期）**
-- `connmgr/manager.go`
-
-**验收条件**
-- 不影响现有多 hop 路由（后代映射仍可覆盖更新）。
-
-**测试点**
-- 新增单测覆盖：
-  - 直连冲突会关闭旧连接；
-  - 后代路由更新仅覆盖不关闭旧连接。
-
-**回滚点**
-- revert 该提交。
-
-### CORE7 - Code Review（阶段 3.3）+ 归档变更（阶段 4）
-**目标**
-- 输出 Code Review 结论与 `docs/change/2026-03-11_transport-pipe-core.md` 归档文档（背景、变更、权衡、测试、回滚）。
-
-### CORE8 - 合并 / tag / push（需你确认 workflow 结束后执行）
-- 由于 `core.IConnection`/传输抽象可能属于破坏性变更，建议发布新 tag（例如 `v0.3.0`）。
-- 在 `repo/MyFlowHub-Core` 执行（待 workflow 结束确认后）：
-  1) 合并到 `master`
-  2) push
-  3) 创建并 push tag
-
----
-
-## 验证命令（建议）
-> 本 workflow 会在 `d:\project\MyFlowHub3\worktrees\refactor-transport-pipe\` 下创建一个 **仅本地使用** 的 `go.work`，用于把 Core/Server/SubProto 的 worktree 串起来联调（不提交到任何仓库）。
-
-```powershell
-$env:GOTMPDIR='d:\\project\\MyFlowHub3\\.tmp\\gotmp'
-New-Item -ItemType Directory -Force -Path $env:GOTMPDIR | Out-Null
-go test ./... -count=1 -p 1
-```
+### CORE-BT9 - 合并 / push（需 workflow 结束后执行）
+- 在 `repo/MyFlowHub-Core` 合并到 `master` 并 push（是否打 tag 由后续确认）。
 

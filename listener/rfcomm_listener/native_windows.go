@@ -1,0 +1,463 @@
+//go:build windows
+
+package rfcomm_listener
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"unsafe"
+
+	core "github.com/yttydcs/myflowhub-core"
+	"golang.org/x/sys/windows"
+)
+
+const (
+	afBth          = 32 // AF_BTH
+	sockStream     = 1  // SOCK_STREAM
+	bthprotoRFCOMM = 3  // BTHPROTO_RFCOMM
+)
+
+type sockaddrBth struct {
+	AddressFamily uint16
+	_             [6]byte // padding to align BtAddr (matches C layout)
+	BtAddr        uint64
+	ServiceClass  windows.GUID
+	Port          uint32
+}
+
+var (
+	ws2_32              = windows.NewLazySystemDLL("ws2_32.dll")
+	procBind            = ws2_32.NewProc("bind")
+	procConnect         = ws2_32.NewProc("connect")
+	procListen          = ws2_32.NewProc("listen")
+	procAccept          = ws2_32.NewProc("accept")
+	procGetsockname     = ws2_32.NewProc("getsockname")
+	procWSASetServiceW  = ws2_32.NewProc("WSASetServiceW")
+	procWSAGetLastError = ws2_32.NewProc("WSAGetLastError")
+)
+
+var wsaOnce sync.Once
+var wsaInitErr error
+
+func ensureWSA() error {
+	wsaOnce.Do(func() {
+		var data windows.WSAData
+		// MakeVer(2,2)
+		const ver = 0x0202
+		wsaInitErr = windows.WSAStartup(ver, &data)
+	})
+	return wsaInitErr
+}
+
+func wsaLastErr() error {
+	r0, _, _ := procWSAGetLastError.Call()
+	if r0 == 0 {
+		return nil
+	}
+	return syscall.Errno(r0)
+}
+
+func bindBth(s windows.Handle, sa *sockaddrBth) error {
+	r0, _, _ := procBind.Call(uintptr(s), uintptr(unsafe.Pointer(sa)), uintptr(int32(unsafe.Sizeof(*sa))))
+	if int32(r0) == -1 {
+		return wsaLastErr()
+	}
+	return nil
+}
+
+func connectBth(s windows.Handle, sa *sockaddrBth) error {
+	r0, _, _ := procConnect.Call(uintptr(s), uintptr(unsafe.Pointer(sa)), uintptr(int32(unsafe.Sizeof(*sa))))
+	if int32(r0) == -1 {
+		return wsaLastErr()
+	}
+	return nil
+}
+
+func listenSock(s windows.Handle, backlog int32) error {
+	r0, _, _ := procListen.Call(uintptr(s), uintptr(backlog))
+	if int32(r0) == -1 {
+		return wsaLastErr()
+	}
+	return nil
+}
+
+func acceptSock(s windows.Handle) (windows.Handle, *sockaddrBth, error) {
+	var sa sockaddrBth
+	l := int32(unsafe.Sizeof(sa))
+	r0, _, _ := procAccept.Call(uintptr(s), uintptr(unsafe.Pointer(&sa)), uintptr(unsafe.Pointer(&l)))
+	nfd := windows.Handle(r0)
+	if nfd == windows.InvalidHandle {
+		return windows.InvalidHandle, nil, wsaLastErr()
+	}
+	return nfd, &sa, nil
+}
+
+func getsocknameBth(s windows.Handle) (*sockaddrBth, error) {
+	var sa sockaddrBth
+	l := int32(unsafe.Sizeof(sa))
+	r0, _, _ := procGetsockname.Call(uintptr(s), uintptr(unsafe.Pointer(&sa)), uintptr(unsafe.Pointer(&l)))
+	if int32(r0) == -1 {
+		return nil, wsaLastErr()
+	}
+	return &sa, nil
+}
+
+type winSockPipe struct {
+	sock windows.Handle
+	// closed==1 means sock already closed.
+	closed atomic.Uint32
+}
+
+func (p *winSockPipe) Read(b []byte) (int, error) {
+	if len(b) == 0 {
+		return 0, nil
+	}
+	var recvd uint32
+	flags := uint32(0)
+	buf := windows.WSABuf{
+		Len: uint32(len(b)),
+		Buf: &b[0],
+	}
+	if err := windows.WSARecv(p.sock, &buf, 1, &recvd, &flags, nil, nil); err != nil {
+		return int(recvd), err
+	}
+	return int(recvd), nil
+}
+
+func (p *winSockPipe) Write(b []byte) (int, error) {
+	if len(b) == 0 {
+		return 0, nil
+	}
+	var sent uint32
+	buf := windows.WSABuf{
+		Len: uint32(len(b)),
+		Buf: &b[0],
+	}
+	if err := windows.WSASend(p.sock, &buf, 1, &sent, 0, nil, nil); err != nil {
+		return int(sent), err
+	}
+	return int(sent), nil
+}
+
+func (p *winSockPipe) Close() error {
+	if p == nil {
+		return nil
+	}
+	if p.closed.Swap(1) == 1 {
+		return nil
+	}
+	return windows.Closesocket(p.sock)
+}
+
+type winListener struct {
+	log     *slog.Logger
+	uuid    string
+	uuidG   windows.GUID
+	channel int
+
+	lnSock windows.Handle
+	closed atomic.Bool
+
+	svcName *uint16
+}
+
+func dialNative(ctx context.Context, opts DialOptions) (core.IPipe, net.Addr, net.Addr, error) {
+	if err := ensureWSA(); err != nil {
+		return nil, nil, nil, err
+	}
+	bd, _ := normalizeBDAddr(opts.BDAddr)
+	uuid := strings.ToLower(strings.TrimSpace(opts.UUID))
+	g, err := uuidToGUID(uuid)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	btAddr, err := bdAddrToBTHAddr(bd)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	s, err := windows.WSASocket(afBth, sockStream, bthprotoRFCOMM, nil, 0, 0)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	// Make sure we don't leak sockets on dial error.
+	defer func() {
+		if s != windows.InvalidHandle {
+			_ = windows.Closesocket(s)
+		}
+	}()
+
+	var sa sockaddrBth
+	sa.AddressFamily = uint16(afBth)
+	sa.BtAddr = btAddr
+	if opts.Channel > 0 {
+		sa.Port = uint32(opts.Channel)
+		// ServiceClass left zero -> channel-first.
+	} else {
+		sa.Port = 0
+		sa.ServiceClass = g
+	}
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- connectBth(s, &sa) }()
+
+	select {
+	case <-ctx.Done():
+		_ = windows.Closesocket(s)
+		return nil, nil, nil, ctx.Err()
+	case err := <-errCh:
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+
+	pipe := &winSockPipe{sock: s}
+	s = windows.InvalidHandle // transferred to pipe
+
+	local := &Addr{UUID: uuid, Channel: opts.Channel, Role: "dial"}
+	remote := &Addr{BDAddr: bd, UUID: uuid, Channel: opts.Channel, Role: "dial"}
+	return pipe, local, remote, nil
+}
+
+func listenNative(opts Options) (nativeListener, error) {
+	if err := ensureWSA(); err != nil {
+		return nil, err
+	}
+	uuid := strings.ToLower(strings.TrimSpace(opts.UUID))
+	g, err := uuidToGUID(uuid)
+	if err != nil {
+		return nil, err
+	}
+	name, _ := windows.UTF16PtrFromString("MyFlowHub")
+
+	s, err := windows.WSASocket(afBth, sockStream, bthprotoRFCOMM, nil, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	ln := &winListener{
+		log:     opts.Logger,
+		uuid:    uuid,
+		uuidG:   g,
+		channel: opts.Channel,
+		lnSock:  s,
+		svcName: name,
+	}
+
+	// Bind.
+	var sa sockaddrBth
+	sa.AddressFamily = uint16(afBth)
+	sa.BtAddr = 0
+	if opts.Channel > 0 {
+		sa.Port = uint32(opts.Channel)
+	} else {
+		sa.Port = 0 // BT_PORT_ANY
+	}
+	if err := bindBth(s, &sa); err != nil {
+		_ = ln.Close()
+		return nil, err
+	}
+
+	// Query assigned channel when using BT_PORT_ANY.
+	if opts.Channel == 0 {
+		if got, err := getsocknameBth(s); err == nil && got != nil && got.Port > 0 {
+			ln.channel = int(got.Port)
+		}
+	}
+
+	if err := listenSock(s, 8); err != nil {
+		_ = ln.Close()
+		return nil, err
+	}
+
+	// Register service record (UUID-first discoverability).
+	if err := ln.registerService(); err != nil {
+		// Not fatal for channel-first scenarios, but we treat it as error to keep behavior consistent.
+		_ = ln.Close()
+		return nil, err
+	}
+
+	return ln, nil
+}
+
+func (l *winListener) Addr() net.Addr {
+	return &Addr{UUID: l.uuid, Channel: l.channel, Role: "listen"}
+}
+
+func (l *winListener) Accept() (core.IPipe, net.Addr, net.Addr, error) {
+	if l.closed.Load() {
+		return nil, nil, nil, errors.New("listener closed")
+	}
+	nfd, rsa, err := acceptSock(l.lnSock)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	pipe := &winSockPipe{sock: nfd}
+
+	remoteBD := ""
+	if rsa != nil {
+		remoteBD = bthAddrToBDAddr(rsa.BtAddr)
+	}
+	local := &Addr{UUID: l.uuid, Channel: l.channel, Role: "listen"}
+	remote := &Addr{BDAddr: remoteBD, UUID: l.uuid, Channel: l.channel, Role: "listen"}
+	return pipe, local, remote, nil
+}
+
+func (l *winListener) Close() error {
+	if l == nil {
+		return nil
+	}
+	if l.closed.Swap(true) {
+		return nil
+	}
+	// Best-effort delete.
+	_ = l.deleteService()
+	if l.lnSock != windows.InvalidHandle {
+		_ = windows.Closesocket(l.lnSock)
+		l.lnSock = windows.InvalidHandle
+	}
+	return nil
+}
+
+func (l *winListener) registerService() error {
+	if l.channel <= 0 {
+		return errors.New("rfcomm channel not assigned")
+	}
+
+	var sa sockaddrBth
+	sa.AddressFamily = uint16(afBth)
+	sa.BtAddr = 0
+	sa.Port = uint32(l.channel)
+
+	// x/sys/windows expects RawSockaddrAny pointer, we pass SOCKADDR_BTH with same initial family field.
+	localSockaddr := (*syscall.RawSockaddrAny)(unsafe.Pointer(&sa))
+	cs := windows.CSAddrInfo{
+		LocalAddr: windows.SocketAddress{
+			Sockaddr:       localSockaddr,
+			SockaddrLength: int32(unsafe.Sizeof(sa)),
+		},
+		RemoteAddr: windows.SocketAddress{},
+		SocketType: int32(sockStream),
+		Protocol:   int32(bthprotoRFCOMM),
+	}
+	qs := windows.WSAQUERYSET{
+		Size:                uint32(unsafe.Sizeof(windows.WSAQUERYSET{})),
+		ServiceInstanceName: l.svcName,
+		ServiceClassId:      &l.uuidG,
+		NameSpace:           windows.NS_BTH,
+		NumberOfCsAddrs:     1,
+		SaBuffer:            &cs,
+	}
+	return wsaSetService(&qs, wsaServiceRegister, 0)
+}
+
+func (l *winListener) deleteService() error {
+	cs := windows.CSAddrInfo{}
+	qs := windows.WSAQUERYSET{
+		Size:                uint32(unsafe.Sizeof(windows.WSAQUERYSET{})),
+		ServiceInstanceName: l.svcName,
+		ServiceClassId:      &l.uuidG,
+		NameSpace:           windows.NS_BTH,
+		NumberOfCsAddrs:     0,
+		SaBuffer:            &cs,
+	}
+	return wsaSetService(&qs, wsaServiceDelete, 0)
+}
+
+type wsaSetServiceOp uint32
+
+const (
+	wsaServiceRegister wsaSetServiceOp = 0 // RNRSERVICE_REGISTER
+	wsaServiceDelete   wsaSetServiceOp = 2 // RNRSERVICE_DELETE
+)
+
+func wsaSetService(qs *windows.WSAQUERYSET, op wsaSetServiceOp, flags uint32) error {
+	r0, _, _ := procWSASetServiceW.Call(uintptr(unsafe.Pointer(qs)), uintptr(op), uintptr(flags))
+	if int32(r0) == -1 {
+		return wsaLastErr()
+	}
+	return nil
+}
+
+func bdAddrToBTHAddr(bdaddr string) (uint64, error) {
+	bdaddr = strings.TrimSpace(bdaddr)
+	bdaddr, err := normalizeBDAddr(bdaddr)
+	if err != nil {
+		return 0, err
+	}
+	// "AA:BB:CC:DD:EE:FF"
+	parts := strings.Split(bdaddr, ":")
+	if len(parts) != 6 {
+		return 0, fmt.Errorf("invalid bdaddr: %q", bdaddr)
+	}
+	var b [6]byte
+	for i := 0; i < 6; i++ {
+		v, err := strconvHexByte(parts[i])
+		if err != nil {
+			return 0, err
+		}
+		b[i] = v
+	}
+	// BTH_ADDR uses NAP/SAP split; keep the same order as string.
+	return uint64(b[0])<<40 | uint64(b[1])<<32 | uint64(b[2])<<24 | uint64(b[3])<<16 | uint64(b[4])<<8 | uint64(b[5]), nil
+}
+
+func bthAddrToBDAddr(addr uint64) string {
+	return fmt.Sprintf("%02X:%02X:%02X:%02X:%02X:%02X",
+		byte(addr>>40),
+		byte(addr>>32),
+		byte(addr>>24),
+		byte(addr>>16),
+		byte(addr>>8),
+		byte(addr),
+	)
+}
+
+func uuidToGUID(uuid string) (windows.GUID, error) {
+	uuid = strings.ToLower(strings.TrimSpace(uuid))
+	if !isUUIDLike(uuid) {
+		return windows.GUID{}, ErrEndpointUUIDInvalid
+	}
+	// Parse hex digits.
+	var b [16]byte
+	j := 0
+	for i := 0; i < len(uuid); i++ {
+		c := uuid[i]
+		if c == '-' {
+			continue
+		}
+		if j >= 32 {
+			return windows.GUID{}, ErrEndpointUUIDInvalid
+		}
+		hi, ok := fromHex(c)
+		if !ok {
+			return windows.GUID{}, ErrEndpointUUIDInvalid
+		}
+		i++
+		if i >= len(uuid) {
+			return windows.GUID{}, ErrEndpointUUIDInvalid
+		}
+		lo, ok := fromHex(uuid[i])
+		if !ok {
+			return windows.GUID{}, ErrEndpointUUIDInvalid
+		}
+		b[j/2] = (hi << 4) | lo
+		j += 2
+	}
+	if j != 32 {
+		return windows.GUID{}, ErrEndpointUUIDInvalid
+	}
+	g := windows.GUID{
+		Data1: uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3]),
+		Data2: uint16(b[4])<<8 | uint16(b[5]),
+		Data3: uint16(b[6])<<8 | uint16(b[7]),
+	}
+	copy(g.Data4[:], b[8:16])
+	return g, nil
+}
