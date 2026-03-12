@@ -24,6 +24,12 @@ import (
 // ReaderFactory 创建 IReader。
 type ReaderFactory func(conn core.IConnection) core.IReader
 
+// ParentDialer abstracts how to dial the parent link.
+//
+// The returned connection must be ready to Add() into the connection manager.
+// Dialer should honor ctx cancellation for timely shutdown.
+type ParentDialer func(ctx context.Context, addr string) (core.IConnection, error)
+
 // Options 配置 Server。
 type Options struct {
 	Name          string
@@ -34,6 +40,7 @@ type Options struct {
 	Config        core.IConfig
 	Manager       core.IConnectionManager
 	ReaderFactory ReaderFactory
+	ParentDialer  ParentDialer
 	NodeID        uint32 // 可选：节点 ID，缺省为 1
 }
 
@@ -334,6 +341,10 @@ func (s *Server) runParentLink(ctx context.Context) {
 	if s.parent == nil || !s.parent.hasParent() {
 		return
 	}
+	dial := s.opts.ParentDialer
+	if dial == nil {
+		dial = defaultTCPParentDialer
+	}
 	retry := s.parent.reconnect
 	if retry <= 0 {
 		retry = 3 * time.Second
@@ -344,17 +355,21 @@ func (s *Server) runParentLink(ctx context.Context) {
 			return
 		default:
 		}
-		raw, err := net.Dial("tcp", s.parent.addr)
+		conn, err := dial(ctx, s.parent.addr)
 		if err != nil {
 			s.log.Warn("dial parent failed", "addr", s.parent.addr, "err", err)
 			time.Sleep(retry)
 			continue
 		}
-		conn := tcp_listener.NewTCPConnection(raw)
+		if conn == nil {
+			s.log.Warn("dial parent returned nil conn", "addr", s.parent.addr)
+			time.Sleep(retry)
+			continue
+		}
 		conn.SetMeta(core.MetaRoleKey, core.RoleParent)
 		if err := s.cm.Add(conn); err != nil {
 			s.log.Warn("add parent connection failed", "addr", s.parent.addr, "err", err)
-			_ = raw.Close()
+			_ = conn.Close()
 			time.Sleep(retry)
 			continue
 		}
@@ -369,6 +384,15 @@ func (s *Server) runParentLink(ctx context.Context) {
 			time.Sleep(retry)
 		}
 	}
+}
+
+func defaultTCPParentDialer(ctx context.Context, addr string) (core.IConnection, error) {
+	var d net.Dialer
+	raw, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	return tcp_listener.NewTCPConnection(raw), nil
 }
 
 func extractConnNodeID(c core.IConnection) uint32 {

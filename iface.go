@@ -134,11 +134,23 @@ type ISender interface {
 	SendWithHeader(header IHeader, payload []byte, codec IHeaderCodec) error
 }
 
+// IPipe 抽象底层传输管道（字节流）。
+//
+// 设计要点：
+// - 只暴露 Read/Write/Close，避免上层强依赖 net.Conn，便于未来接入 RFCOMM/串口等承载；
+// - 地址信息仍由 IConnection.LocalAddr/RemoteAddr 提供；
+// - deadline/flush 等能力按需通过可选接口扩展（不同承载能力不同，不作为必选约束）。
+type IPipe interface {
+	io.ReadWriteCloser
+}
+
 // IConnection 连接接口：封装实际连接与其元数据，支持发送、接收事件、关闭与元数据的读写。
 type IConnection interface {
 	ISender
 	// ID 返回连接的唯一标识
 	ID() string
+	// Pipe 返回底层字节管道（用于 reader/codec 解包与发送）。
+	Pipe() IPipe
 	// Close 关闭连接
 	Close() error
 	// OnReceive 注册接收事件回调
@@ -157,7 +169,6 @@ type IConnection interface {
 	Reader() IReader
 	SetReader(IReader)
 	DispatchReceive(IHeader, []byte)
-	RawConn() net.Conn
 }
 
 // IConnectionManager 连接管理器：由 IServer 持有，用于集中管理连接。

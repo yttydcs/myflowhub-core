@@ -130,20 +130,40 @@ func (m *Manager) GetByNode(id uint32) (core.IConnection, bool) {
 }
 
 func (m *Manager) UpdateNodeIndex(nodeID uint32, conn core.IConnection) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if nodeID == 0 {
 		return
 	}
-	if conn == nil {
-		if existing, ok := m.nodeIndex[nodeID]; ok {
-			if existing != nil {
-				delete(m.nodeIndex, nodeID)
+	// 直连绑定：nodeID == conn.meta("nodeID")
+	isDirectBind := func(c core.IConnection) bool {
+		if c == nil {
+			return false
+		}
+		if v, ok := c.GetMeta("nodeID"); ok {
+			if nid, ok2 := asUint32(v); ok2 && nid != 0 && nid == nodeID {
+				return true
 			}
 		}
+		return false
+	}
+
+	var oldDirectConnID string
+	m.mu.Lock()
+	if conn == nil {
+		delete(m.nodeIndex, nodeID)
+		m.mu.Unlock()
 		return
 	}
+	existing := m.nodeIndex[nodeID]
 	m.nodeIndex[nodeID] = conn
+	if existing != nil && existing != conn && isDirectBind(conn) && isDirectBind(existing) {
+		oldDirectConnID = existing.ID()
+	}
+	m.mu.Unlock()
+
+	// 关闭旧直连连接必须在锁外执行，避免锁竞争与潜在死锁。
+	if oldDirectConnID != "" {
+		_ = m.Remove(oldDirectConnID)
+	}
 }
 
 // AddNodeIndex 追加 node 映射，允许同一连接挂多个 nodeID。
@@ -224,4 +244,25 @@ func (m *Manager) CloseAll() error {
 		_ = c.Close()
 	}
 	return nil
+}
+
+func asUint32(v any) (uint32, bool) {
+	switch vv := v.(type) {
+	case uint32:
+		return vv, true
+	case uint64:
+		return uint32(vv), true
+	case int:
+		if vv < 0 {
+			return 0, false
+		}
+		return uint32(vv), true
+	case int64:
+		if vv < 0 {
+			return 0, false
+		}
+		return uint32(vv), true
+	default:
+		return 0, false
+	}
 }
