@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log/slog"
 	"net"
 	"strconv"
@@ -20,7 +21,7 @@ import (
 var (
 	errNilConn          = errors.New("nil connection")
 	errNilCodec         = errors.New("nil codec")
-	errNilRawConn       = errors.New("nil raw conn")
+	errNilPipe          = errors.New("nil pipe")
 	errWriterClosed     = errors.New("writer closed")
 	errEnqueueTimeout   = errors.New("enqueue timeout")
 	errDispatcherClosed = errors.New("dispatcher closed")
@@ -76,16 +77,16 @@ func (w *connWriter) write(task sendTask) error {
 	if task.codec == nil {
 		return errNilCodec
 	}
-	raw := w.conn.RawConn()
-	if raw == nil {
-		return errNilRawConn
+	pipe := w.conn.Pipe()
+	if pipe == nil {
+		return errNilPipe
 	}
 
 	if w.encodeInWriter {
-		return writeFrame(raw, task.codec, task.hdr, task.payload)
+		return writeFrame(pipe, task.codec, task.hdr, task.payload)
 	}
 	// payload assumed encoded already
-	_, err := raw.Write(task.payload)
+	_, err := pipe.Write(task.payload)
 	return err
 }
 
@@ -356,23 +357,23 @@ func (d *SendDispatcher) String() string {
 }
 
 // writeFrame encodes and writes a frame, preferring a zero-copy path for HeaderTcp.
-func writeFrame(conn net.Conn, codec core.IHeaderCodec, hdr core.IHeader, payload []byte) error {
+func writeFrame(w io.Writer, codec core.IHeaderCodec, hdr core.IHeader, payload []byte) error {
 	switch c := codec.(type) {
 	case header.HeaderTcpCodec:
-		return writeTCPFrame(conn, c, hdr, payload)
+		return writeTCPFrame(w, c, hdr, payload)
 	case *header.HeaderTcpCodec:
-		return writeTCPFrame(conn, *c, hdr, payload)
+		return writeTCPFrame(w, *c, hdr, payload)
 	default:
 		frame, err := codec.Encode(hdr, payload)
 		if err != nil {
 			return err
 		}
-		_, err = conn.Write(frame)
+		_, err = w.Write(frame)
 		return err
 	}
 }
 
-func writeTCPFrame(conn net.Conn, _ header.HeaderTcpCodec, hdr core.IHeader, payload []byte) error {
+func writeTCPFrame(w io.Writer, _ header.HeaderTcpCodec, hdr core.IHeader, payload []byte) error {
 	tcpHdr := header.CloneToTCP(hdr)
 	if tcpHdr == nil {
 		return errNilCodec
@@ -398,10 +399,10 @@ func writeTCPFrame(conn net.Conn, _ header.HeaderTcpCodec, hdr core.IHeader, pay
 	binary.BigEndian.PutUint32(buf[24:28], tcpHdr.Timestamp)
 	binary.BigEndian.PutUint32(buf[28:32], tcpHdr.PayloadLen)
 	if len(payload) == 0 {
-		_, err := conn.Write(buf)
+		_, err := w.Write(buf)
 		return err
 	}
-	_, err := (&net.Buffers{buf, payload}).WriteTo(conn)
+	_, err := (&net.Buffers{buf, payload}).WriteTo(w)
 	return err
 }
 

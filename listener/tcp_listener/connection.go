@@ -9,9 +9,18 @@ import (
 	core "github.com/yttydcs/myflowhub-core"
 )
 
+type tcpPipe struct {
+	conn net.Conn
+}
+
+func (p *tcpPipe) Read(b []byte) (int, error)  { return p.conn.Read(b) }
+func (p *tcpPipe) Write(b []byte) (int, error) { return p.conn.Write(b) }
+func (p *tcpPipe) Close() error                { return p.conn.Close() }
+
 // tcpConnection 是针对 TCP 的 IConnection 实现。
 type tcpConnection struct {
 	conn   net.Conn
+	pipe   core.IPipe
 	id     string
 	mu     sync.RWMutex
 	meta   map[string]any
@@ -23,6 +32,7 @@ type tcpConnection struct {
 func NewTCPConnection(c net.Conn) *tcpConnection {
 	return &tcpConnection{
 		conn: c,
+		pipe: &tcpPipe{conn: c},
 		id:   fmt.Sprintf("%s->%s", c.LocalAddr().String(), c.RemoteAddr().String()),
 		meta: make(map[string]any),
 	}
@@ -33,6 +43,8 @@ var _ core.IConnection = (*tcpConnection)(nil)
 var _ core.ISender = (*tcpConnection)(nil)
 
 func (c *tcpConnection) ID() string { return c.id }
+
+func (c *tcpConnection) Pipe() core.IPipe { return c.pipe }
 
 func (c *tcpConnection) Close() error { return c.conn.Close() }
 
@@ -71,8 +83,6 @@ func (c *tcpConnection) DispatchReceive(h core.IHeader, payload []byte) {
 		recv(c, h, payload)
 	}
 }
-
-func (c *tcpConnection) RawConn() net.Conn { return c.conn }
 
 func (c *tcpConnection) Send(data []byte) error {
 	_, err := c.conn.Write(data)
