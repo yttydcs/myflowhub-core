@@ -1,5 +1,7 @@
 # Core：Pipe 抽象 + MultiListener + ParentDialer（为 RFCOMM 等多承载铺路）
 
+> **重大变更（Breaking Change）**：`core.IConnection` 移除 `RawConn() net.Conn`，新增 `Pipe() core.IPipe`。所有连接实现、上游依赖与测试 mock 需要同步适配。
+
 ## 变更背景 / 目标
 现状（变更前）：
 - Core 连接链路在多个关键路径上强依赖 `net.Conn`（典型：`core.IConnection.RawConn()`、Reader 解包、SendDispatcher 发送优化）。
@@ -62,4 +64,3 @@
   - 恢复 `RawConn()` 并回退 Reader/SendDispatcher/ParentDialer 改造；
   - 移除 `MultiListener` 与 ConnMgr 冲突策略变更；
   - Server/SubProto 同步回滚对应适配提交。
-
