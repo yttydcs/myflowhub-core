@@ -9,23 +9,23 @@ import (
 	"github.com/yttydcs/myflowhub-core/header"
 )
 
-// PreRoutingProcess 属于核心层：在子协议分发前执行基础路由逻辑。
-// 规则：
-// 1. target==0 => 广播（仅向子节点下行，来自父节点的广播也只向子节点下行，不回传父节点）
-// 2. target!=local => 转发（直接写到目标连接，未命中时上送父节点）
-// 3. target==local => 继续 dispatcher 后续子协议处理
-// 依赖：连接元数据中存有 nodeID（由登录协议写入），以及 role（parent/child）。
+// PreRoutingProcess performs fast header-only routing before sub-protocol dispatch.
 type PreRoutingProcess struct {
 	log         *slog.Logger
 	cfg         core.IConfig
 	forwardMode bool
+	router      *HeaderRouter
 }
 
 func NewPreRoutingProcess(log *slog.Logger) *PreRoutingProcess {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &PreRoutingProcess{log: log, forwardMode: true}
+	return &PreRoutingProcess{
+		log:         log,
+		forwardMode: true,
+		router:      NewHeaderRouter(),
+	}
 }
 
 func (p *PreRoutingProcess) WithConfig(cfg core.IConfig) *PreRoutingProcess {
@@ -44,79 +44,69 @@ func (p *PreRoutingProcess) WithForwardMode(enable bool) *PreRoutingProcess {
 }
 
 func (p *PreRoutingProcess) OnListen(conn core.IConnection) {
-	p.log.Info("新连接", "id", conn.ID(), "remote", conn.RemoteAddr())
+	p.log.Info("new connection", "id", conn.ID(), "remote", conn.RemoteAddr())
 }
+
 func (p *PreRoutingProcess) OnSend(_ context.Context, _ core.IConnection, _ core.IHeader, _ []byte) error {
 	return nil
 }
+
 func (p *PreRoutingProcess) OnClose(conn core.IConnection) {
-	p.log.Info("连接关闭", "id", conn.ID())
+	p.log.Info("connection closed", "id", conn.ID())
 }
 
 func (p *PreRoutingProcess) OnReceive(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) {
-	// 兼容：直接调用 PreRoute，忽略返回值。
 	p.PreRoute(ctx, conn, hdr, payload)
 }
 
-// PreRoute 决定是否继续后续子协议处理；返回 false 表示已处理/转发完毕。
+// PreRoute returns true when the frame should continue into dispatcher/handler processing.
 func (p *PreRoutingProcess) PreRoute(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) bool {
 	srv := core.ServerFromContext(ctx)
 	if srv == nil {
-		p.log.Warn("无法获取 server 上下文，跳过路由")
+		p.log.Warn("server context missing, skip preroute")
 		return true
 	}
 	if hdr == nil {
-		p.log.Warn("空头部，跳过")
+		p.log.Warn("nil header, skip preroute")
 		return true
 	}
-	// SourceID=0 仅放行登录子协议（SubProto=2），其余直接丢弃
-	if hdr.SourceID() == 0 && hdr.SubProto() != 2 {
-		p.log.Debug("丢弃未登录来源的非登录协议帧", "subproto", hdr.SubProto())
+
+	decision := p.router.Decide(srv.NodeID(), conn, hdr)
+	switch decision.Kind {
+	case RouteDecisionDrop:
+		p.log.Debug("drop frame in preroute", "reason", decision.Reason, "subproto", hdr.SubProto(), "source", hdr.SourceID())
 		return false
-	}
-	// 登录协议直接放行到 dispatcher，由子协议处理器处理
-	if hdr.SubProto() == 2 {
+	case RouteDecisionHopDispatch, RouteDecisionLocalDispatch:
 		return true
-	}
-
-	// 统一规则：控制面（MajorCmd）必须进入 handler（逐跳可见），不在 Core 做自动转发/广播。
-	if hdr.Major() == header.MajorCmd {
-		return true
-	}
-	srcIsParent := isParentConn(conn)
-	target := hdr.TargetID()
-	local := srv.NodeID()
-
-	// 广播：只向子节点下行，不向父节点上行。
-	if target == 0 {
+	case RouteDecisionBroadcastChildren:
 		fwdHdr, ok := p.cloneForForward(hdr)
 		if !ok {
-			p.log.Warn("广播 hop_limit 耗尽，丢弃", "subproto", hdr.SubProto(), "source", hdr.SourceID())
+			p.log.Warn("drop broadcast frame: hop_limit exhausted", "subproto", hdr.SubProto(), "source", hdr.SourceID())
 			return false
 		}
 		p.handleBroadcast(ctx, srv, conn, fwdHdr, payload)
 		return false
-	}
-
-	// 跨节点转发
-	if target != local {
+	case RouteDecisionFastForward:
+		target := hdr.TargetID()
+		local := srv.NodeID()
 		if !p.forwardMode {
-			p.log.Debug("转发功能已禁用，丢弃跨节点消息", "target", target, "local", local)
+			p.log.Debug("forwarding disabled, drop remote-target frame", "target", target, "local", local)
 			return false
 		}
 		fwdHdr, ok := p.cloneForForward(hdr)
 		if !ok {
-			p.log.Warn("转发 hop_limit 耗尽，丢弃", "target", target, "local", local, "subproto", hdr.SubProto(), "source", hdr.SourceID())
+			p.log.Warn("drop forwarded frame: hop_limit exhausted", "target", target, "local", local, "subproto", hdr.SubProto(), "source", hdr.SourceID())
 			return false
 		}
+		srcIsParent := isParentConn(conn)
 		if p.forwardToLocalChild(ctx, srv, fwdHdr, payload, target) {
 			return false
 		}
 		p.forwardToParent(ctx, srv, fwdHdr, payload, srcIsParent, target)
 		return false
+	default:
+		return true
 	}
-	// 本地：继续 dispatcher 的后续处理
-	return true
 }
 
 func (p *PreRoutingProcess) forwardOrDrop(sendFn func() error) {
@@ -124,19 +114,19 @@ func (p *PreRoutingProcess) forwardOrDrop(sendFn func() error) {
 		return
 	}
 	if err := sendFn(); err != nil {
-		p.log.Error("转发失败", "err", err)
+		p.log.Error("forward failed", "err", err)
 	}
 }
 
 func (p *PreRoutingProcess) handleBroadcast(ctx context.Context, srv core.IServer, src core.IConnection, hdr core.IHeader, payload []byte) {
-	p.log.Info("广播消息", "from", hdr.SourceID(), "subproto", hdr.SubProto())
+	p.log.Info("broadcast frame", "from", hdr.SourceID(), "subproto", hdr.SubProto())
 	baseHdr := hdr
 	srv.ConnManager().Range(func(c core.IConnection) bool {
 		if c.ID() == src.ID() {
 			return true
 		}
 		if isParentConn(c) {
-			return true // 不向父节点广播
+			return true
 		}
 		if !p.forwardMode {
 			return true
@@ -173,11 +163,11 @@ func (p *PreRoutingProcess) forwardToLocalChild(ctx context.Context, srv core.IS
 
 func (p *PreRoutingProcess) forwardToParent(ctx context.Context, srv core.IServer, hdr core.IHeader, payload []byte, srcIsParent bool, target uint32) {
 	if srcIsParent {
-		p.log.Warn("目标节点未找到，来自父节点的消息丢弃", "target", target)
+		p.log.Warn("drop frame from parent: target not found", "target", target)
 		return
 	}
 	if !p.forwardMode {
-		p.log.Warn("转发已禁用，丢弃未命中路由", "target", target)
+		p.log.Warn("forwarding disabled, drop unroutable frame", "target", target)
 		return
 	}
 	if parent, ok := findParentConn(srv.ConnManager()); ok {
@@ -186,7 +176,7 @@ func (p *PreRoutingProcess) forwardToParent(ctx context.Context, srv core.IServe
 		})
 		return
 	}
-	p.log.Warn("目标节点未找到，丢弃", "target", target)
+	p.log.Warn("drop frame: target not found", "target", target)
 }
 
 func (p *PreRoutingProcess) cloneForForward(hdr core.IHeader) (core.IHeader, bool) {

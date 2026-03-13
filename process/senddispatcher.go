@@ -2,20 +2,16 @@ package process
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"io"
 	"log/slog"
-	"net"
 	"strconv"
 	"sync"
 	"time"
 
 	core "github.com/yttydcs/myflowhub-core"
 	coreconfig "github.com/yttydcs/myflowhub-core/config"
-	"github.com/yttydcs/myflowhub-core/header"
 )
 
 var (
@@ -83,7 +79,7 @@ func (w *connWriter) write(task sendTask) error {
 	}
 
 	if w.encodeInWriter {
-		return writeFrame(pipe, task.codec, task.hdr, task.payload)
+		return WriteFrame(pipe, task.codec, core.Frame{Header: task.hdr, Payload: task.payload})
 	}
 	// payload assumed encoded already
 	_, err := pipe.Write(task.payload)
@@ -354,56 +350,6 @@ func (d *SendDispatcher) Snapshot() (channels, workers, buffer int) {
 func (d *SendDispatcher) String() string {
 	ch, w, b := d.Snapshot()
 	return fmt.Sprintf("SendDispatcher{channels=%d workers=%d buffer=%d connBuffer=%d enqueueTimeout=%s}", ch, w, b, d.connBuffer, d.enqueueTimeout)
-}
-
-// writeFrame encodes and writes a frame, preferring a zero-copy path for HeaderTcp.
-func writeFrame(w io.Writer, codec core.IHeaderCodec, hdr core.IHeader, payload []byte) error {
-	switch c := codec.(type) {
-	case header.HeaderTcpCodec:
-		return writeTCPFrame(w, c, hdr, payload)
-	case *header.HeaderTcpCodec:
-		return writeTCPFrame(w, *c, hdr, payload)
-	default:
-		frame, err := codec.Encode(hdr, payload)
-		if err != nil {
-			return err
-		}
-		_, err = w.Write(frame)
-		return err
-	}
-}
-
-func writeTCPFrame(w io.Writer, _ header.HeaderTcpCodec, hdr core.IHeader, payload []byte) error {
-	tcpHdr := header.CloneToTCP(hdr)
-	if tcpHdr == nil {
-		return errNilCodec
-	}
-	if tcpHdr.HopLimit == 0 {
-		tcpHdr.HopLimit = header.DefaultHopLimit
-	}
-	if uint32(len(payload)) != tcpHdr.PayloadLen {
-		tcpHdr.PayloadLen = uint32(len(payload))
-	}
-	buf := make([]byte, 32)
-	binary.BigEndian.PutUint16(buf[0:2], header.HeaderTcpMagicV2)
-	buf[2] = header.HeaderTcpVersionV2
-	buf[3] = 32 // hdr_len
-	buf[4] = tcpHdr.TypeFmt
-	buf[5] = tcpHdr.Flags
-	buf[6] = tcpHdr.HopLimit
-	buf[7] = tcpHdr.RouteFlags
-	binary.BigEndian.PutUint32(buf[8:12], tcpHdr.MsgID)
-	binary.BigEndian.PutUint32(buf[12:16], tcpHdr.Source)
-	binary.BigEndian.PutUint32(buf[16:20], tcpHdr.Target)
-	binary.BigEndian.PutUint32(buf[20:24], tcpHdr.TraceID)
-	binary.BigEndian.PutUint32(buf[24:28], tcpHdr.Timestamp)
-	binary.BigEndian.PutUint32(buf[28:32], tcpHdr.PayloadLen)
-	if len(payload) == 0 {
-		_, err := w.Write(buf)
-		return err
-	}
-	_, err := (&net.Buffers{buf, payload}).WriteTo(w)
-	return err
 }
 
 func readDurationMs(cfg core.IConfig, key string, def int) time.Duration {
