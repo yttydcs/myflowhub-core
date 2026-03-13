@@ -9,19 +9,20 @@ import (
 	core "github.com/yttydcs/myflowhub-core"
 )
 
-// TCPReader 使用 IHeaderCodec 从连接流中解码。
-//
-// 历史上该 reader 直接依赖 net.Conn（通过 conn.RawConn）；
-// 为支持多承载（例如 RFCOMM/串口等），当前实现改为基于 conn.Pipe() 的字节流抽象。
+// TCPReader keeps the historical name, but now reads transport-neutral frames from conn.Pipe().
 type TCPReader struct {
-	logger *slog.Logger
+	logger      *slog.Logger
+	frameReader core.IFrameReader
 }
 
 func NewTCP(logger *slog.Logger) *TCPReader {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &TCPReader{logger: logger}
+	return &TCPReader{
+		logger:      logger,
+		frameReader: NewStreamFrameReader(),
+	}
 }
 
 func (r *TCPReader) ReadLoop(ctx context.Context, conn core.IConnection, codec core.IHeaderCodec) error {
@@ -43,10 +44,10 @@ func (r *TCPReader) ReadLoop(ctx context.Context, conn core.IConnection, codec c
 			return ctx.Err()
 		default:
 		}
-		h, payload, err := codec.Decode(pipe)
+		frame, err := r.frameReader.ReadFrame(pipe, codec)
 		if err != nil {
 			return err
 		}
-		conn.DispatchReceive(h, payload)
+		conn.DispatchReceive(frame.Header, frame.Payload)
 	}
 }

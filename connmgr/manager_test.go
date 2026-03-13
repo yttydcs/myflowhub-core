@@ -84,6 +84,101 @@ func (c *stubConn) SetReader(r core.IReader) {
 
 func (c *stubConn) DispatchReceive(core.IHeader, []byte) {}
 
+type stubLink struct {
+	id     string
+	pipe   core.IPipe
+	closed atomic.Bool
+	mu     sync.RWMutex
+	meta   map[string]any
+}
+
+func newStubLink(id string) *stubLink {
+	return &stubLink{id: id, pipe: nopPipe{}, meta: make(map[string]any)}
+}
+
+func (l *stubLink) ID() string       { return l.id }
+func (l *stubLink) Pipe() core.IPipe { return l.pipe }
+func (l *stubLink) Close() error     { l.closed.Store(true); return nil }
+func (l *stubLink) LocalAddr() net.Addr {
+	return nil
+}
+func (l *stubLink) RemoteAddr() net.Addr {
+	return nil
+}
+func (l *stubLink) SetMeta(key string, val any) {
+	l.mu.Lock()
+	l.meta[key] = val
+	l.mu.Unlock()
+}
+func (l *stubLink) GetMeta(key string) (any, bool) {
+	l.mu.RLock()
+	v, ok := l.meta[key]
+	l.mu.RUnlock()
+	return v, ok
+}
+func (l *stubLink) Metadata() map[string]any {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	cp := make(map[string]any, len(l.meta))
+	for k, v := range l.meta {
+		cp[k] = v
+	}
+	return cp
+}
+
+func TestManager_AddLink_CompatibilityPath(t *testing.T) {
+	m := New()
+	c1 := newStubConn("c1")
+	if err := m.AddLink(c1); err != nil {
+		t.Fatalf("AddLink(c1): %v", err)
+	}
+	got, ok := m.GetLink("c1")
+	if !ok || got == nil || got.ID() != "c1" {
+		t.Fatalf("GetLink(c1) = ok=%v link=%v", ok, got)
+	}
+}
+
+func TestManager_AddLink_RejectsNonConnection(t *testing.T) {
+	m := New()
+	l1 := newStubLink("l1")
+	if err := m.AddLink(l1); err == nil {
+		t.Fatalf("expected AddLink to reject non-IConnection link")
+	}
+}
+
+func TestManager_LinkHooks(t *testing.T) {
+	m := New()
+	c1 := newStubConn("c1")
+	var addCount atomic.Int32
+	var removeCount atomic.Int32
+	m.SetLinkHooks(core.LinkHooks{
+		OnAdd: func(link core.ILink) {
+			if link == nil || link.ID() != "c1" {
+				t.Fatalf("unexpected add link: %#v", link)
+			}
+			addCount.Add(1)
+		},
+		OnRemove: func(link core.ILink) {
+			if link == nil || link.ID() != "c1" {
+				t.Fatalf("unexpected remove link: %#v", link)
+			}
+			removeCount.Add(1)
+		},
+	})
+	if err := m.Add(c1); err != nil {
+		t.Fatalf("Add c1: %v", err)
+	}
+	if err := m.Remove("c1"); err != nil {
+		t.Fatalf("Remove c1: %v", err)
+	}
+	if addCount.Load() != 1 {
+		t.Fatalf("add hook count=%d, want 1", addCount.Load())
+	}
+	if removeCount.Load() != 1 {
+		t.Fatalf("remove hook count=%d, want 1", removeCount.Load())
+	}
+}
+
 func TestManager_UpdateNodeIndex_DirectConflictClosesOld(t *testing.T) {
 	m := New()
 
@@ -131,8 +226,8 @@ func TestManager_UpdateNodeIndex_DescendantOverwriteDoesNotCloseOld(t *testing.T
 	old.SetMeta("nodeID", uint32(100))
 	newc.SetMeta("nodeID", uint32(200))
 
-	m.UpdateNodeIndex(30, old)  // descendant mapping
-	m.UpdateNodeIndex(30, newc) // overwrite descendant mapping
+	m.UpdateNodeIndex(30, old)
+	m.UpdateNodeIndex(30, newc)
 
 	if old.closed.Load() {
 		t.Fatalf("expected old not to be closed")
@@ -145,7 +240,10 @@ func TestManager_UpdateNodeIndex_DescendantOverwriteDoesNotCloseOld(t *testing.T
 	}
 }
 
-func TestStubConn_Compile(t *testing.T) {
+func TestStubTypes_Compile(t *testing.T) {
+	var _ core.ILink = (*stubConn)(nil)
 	var _ core.IConnection = (*stubConn)(nil)
+	var _ core.ILink = (*stubLink)(nil)
+	var _ core.ILinkManager = (*Manager)(nil)
 	_ = context.Background()
 }
