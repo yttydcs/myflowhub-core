@@ -33,14 +33,10 @@ type sockaddrBth struct {
 }
 
 var (
-	ws2_32              = windows.NewLazySystemDLL("ws2_32.dll")
-	procBind            = ws2_32.NewProc("bind")
-	procConnect         = ws2_32.NewProc("connect")
-	procListen          = ws2_32.NewProc("listen")
-	procAccept          = ws2_32.NewProc("accept")
-	procGetsockname     = ws2_32.NewProc("getsockname")
-	procWSASetServiceW  = ws2_32.NewProc("WSASetServiceW")
-	procWSAGetLastError = ws2_32.NewProc("WSAGetLastError")
+	ws2_32             = windows.NewLazySystemDLL("ws2_32.dll")
+	procAccept         = ws2_32.NewProc("accept")
+	procGetsockname    = ws2_32.NewProc("getsockname")
+	procWSASetServiceW = ws2_32.NewProc("WSASetServiceW")
 )
 
 var wsaOnce sync.Once
@@ -56,56 +52,62 @@ func ensureWSA() error {
 	return wsaInitErr
 }
 
-func wsaLastErr() error {
-	r0, _, _ := procWSAGetLastError.Call()
-	if r0 == 0 {
-		return nil
+func winsockCallErr(err error) error {
+	if err == nil {
+		return windows.WSAEINVAL
 	}
-	return syscall.Errno(r0)
+	errno, ok := err.(syscall.Errno)
+	if !ok {
+		return err
+	}
+	if errno == 0 {
+		return windows.WSAEINVAL
+	}
+	return errno
 }
 
-func bindBth(s windows.Handle, sa *sockaddrBth) error {
-	r0, _, _ := procBind.Call(uintptr(s), uintptr(unsafe.Pointer(sa)), uintptr(int32(unsafe.Sizeof(*sa))))
-	if int32(r0) == -1 {
-		return wsaLastErr()
-	}
-	return nil
+func newRawSockaddrBth(btAddr uint64, serviceClass windows.GUID, port uint32) windows.RawSockaddrBth {
+	var raw windows.RawSockaddrBth
+	family := uint16(afBth)
+	raw.AddressFamily = *(*[2]byte)(unsafe.Pointer(&family))
+	raw.BtAddr = *(*[8]byte)(unsafe.Pointer(&btAddr))
+	raw.ServiceClassId = *(*[16]byte)(unsafe.Pointer(&serviceClass))
+	raw.Port = *(*[4]byte)(unsafe.Pointer(&port))
+	return raw
 }
 
-func connectBth(s windows.Handle, sa *sockaddrBth) error {
-	r0, _, _ := procConnect.Call(uintptr(s), uintptr(unsafe.Pointer(sa)), uintptr(int32(unsafe.Sizeof(*sa))))
-	if int32(r0) == -1 {
-		return wsaLastErr()
+func sockaddrBthFromRaw(raw *windows.RawSockaddrBth) sockaddrBth {
+	if raw == nil {
+		return sockaddrBth{}
 	}
-	return nil
-}
-
-func listenSock(s windows.Handle, backlog int32) error {
-	r0, _, _ := procListen.Call(uintptr(s), uintptr(backlog))
-	if int32(r0) == -1 {
-		return wsaLastErr()
+	return sockaddrBth{
+		AddressFamily: *(*uint16)(unsafe.Pointer(&raw.AddressFamily[0])),
+		BtAddr:        *(*uint64)(unsafe.Pointer(&raw.BtAddr[0])),
+		ServiceClass:  *(*windows.GUID)(unsafe.Pointer(&raw.ServiceClassId[0])),
+		Port:          *(*uint32)(unsafe.Pointer(&raw.Port[0])),
 	}
-	return nil
 }
 
 func acceptSock(s windows.Handle) (windows.Handle, *sockaddrBth, error) {
-	var sa sockaddrBth
-	l := int32(unsafe.Sizeof(sa))
-	r0, _, _ := procAccept.Call(uintptr(s), uintptr(unsafe.Pointer(&sa)), uintptr(unsafe.Pointer(&l)))
-	nfd := windows.Handle(r0)
-	if nfd == windows.InvalidHandle {
-		return windows.InvalidHandle, nil, wsaLastErr()
+	var raw windows.RawSockaddrBth
+	l := int32(unsafe.Sizeof(raw))
+	r0, _, callErr := procAccept.Call(uintptr(s), uintptr(unsafe.Pointer(&raw)), uintptr(unsafe.Pointer(&l)))
+	if int32(r0) == -1 {
+		return windows.InvalidHandle, nil, winsockCallErr(callErr)
 	}
+	nfd := windows.Handle(r0)
+	sa := sockaddrBthFromRaw(&raw)
 	return nfd, &sa, nil
 }
 
 func getsocknameBth(s windows.Handle) (*sockaddrBth, error) {
-	var sa sockaddrBth
-	l := int32(unsafe.Sizeof(sa))
-	r0, _, _ := procGetsockname.Call(uintptr(s), uintptr(unsafe.Pointer(&sa)), uintptr(unsafe.Pointer(&l)))
+	var raw windows.RawSockaddrBth
+	l := int32(unsafe.Sizeof(raw))
+	r0, _, callErr := procGetsockname.Call(uintptr(s), uintptr(unsafe.Pointer(&raw)), uintptr(unsafe.Pointer(&l)))
 	if int32(r0) == -1 {
-		return nil, wsaLastErr()
+		return nil, winsockCallErr(callErr)
 	}
+	sa := sockaddrBthFromRaw(&raw)
 	return &sa, nil
 }
 
@@ -165,7 +167,8 @@ type winListener struct {
 	lnSock windows.Handle
 	closed atomic.Bool
 
-	svcName *uint16
+	svcName    *uint16
+	svcRegDone atomic.Bool
 }
 
 func dialNative(ctx context.Context, opts DialOptions) (core.IPipe, net.Addr, net.Addr, error) {
@@ -194,19 +197,17 @@ func dialNative(ctx context.Context, opts DialOptions) (core.IPipe, net.Addr, ne
 		}
 	}()
 
-	var sa sockaddrBth
-	sa.AddressFamily = uint16(afBth)
-	sa.BtAddr = btAddr
+	sa := &windows.SockaddrBth{BtAddr: btAddr}
 	if opts.Channel > 0 {
 		sa.Port = uint32(opts.Channel)
 		// ServiceClass left zero -> channel-first.
 	} else {
 		sa.Port = 0
-		sa.ServiceClass = g
+		sa.ServiceClassId = g
 	}
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- connectBth(s, &sa) }()
+	go func() { errCh <- windows.Connect(s, sa) }()
 
 	select {
 	case <-ctx.Done():
@@ -251,15 +252,13 @@ func listenNative(opts Options) (nativeListener, error) {
 	}
 
 	// Bind.
-	var sa sockaddrBth
-	sa.AddressFamily = uint16(afBth)
-	sa.BtAddr = 0
+	sa := &windows.SockaddrBth{}
 	if opts.Channel > 0 {
 		sa.Port = uint32(opts.Channel)
 	} else {
 		sa.Port = 0 // BT_PORT_ANY
 	}
-	if err := bindBth(s, &sa); err != nil {
+	if err := windows.Bind(s, sa); err != nil {
 		_ = ln.Close()
 		return nil, err
 	}
@@ -271,7 +270,7 @@ func listenNative(opts Options) (nativeListener, error) {
 		}
 	}
 
-	if err := listenSock(s, 8); err != nil {
+	if err := windows.Listen(s, 8); err != nil {
 		_ = ln.Close()
 		return nil, err
 	}
@@ -317,7 +316,9 @@ func (l *winListener) Close() error {
 		return nil
 	}
 	// Best-effort delete.
-	_ = l.deleteService()
+	if l.svcRegDone.Load() {
+		_ = l.deleteService()
+	}
 	if l.lnSock != windows.InvalidHandle {
 		_ = windows.Closesocket(l.lnSock)
 		l.lnSock = windows.InvalidHandle
@@ -330,17 +331,14 @@ func (l *winListener) registerService() error {
 		return errors.New("rfcomm channel not assigned")
 	}
 
-	var sa sockaddrBth
-	sa.AddressFamily = uint16(afBth)
-	sa.BtAddr = 0
-	sa.Port = uint32(l.channel)
+	raw := newRawSockaddrBth(0, windows.GUID{}, uint32(l.channel))
 
 	// x/sys/windows expects RawSockaddrAny pointer, we pass SOCKADDR_BTH with same initial family field.
-	localSockaddr := (*syscall.RawSockaddrAny)(unsafe.Pointer(&sa))
+	localSockaddr := (*syscall.RawSockaddrAny)(unsafe.Pointer(&raw))
 	cs := windows.CSAddrInfo{
 		LocalAddr: windows.SocketAddress{
 			Sockaddr:       localSockaddr,
-			SockaddrLength: int32(unsafe.Sizeof(sa)),
+			SockaddrLength: int32(unsafe.Sizeof(raw)),
 		},
 		RemoteAddr: windows.SocketAddress{},
 		SocketType: int32(sockStream),
@@ -354,7 +352,11 @@ func (l *winListener) registerService() error {
 		NumberOfCsAddrs:     1,
 		SaBuffer:            &cs,
 	}
-	return wsaSetService(&qs, wsaServiceRegister, 0)
+	if err := wsaSetService(&qs, wsaServiceRegister, 0); err != nil {
+		return err
+	}
+	l.svcRegDone.Store(true)
+	return nil
 }
 
 func (l *winListener) deleteService() error {
@@ -367,7 +369,11 @@ func (l *winListener) deleteService() error {
 		NumberOfCsAddrs:     0,
 		SaBuffer:            &cs,
 	}
-	return wsaSetService(&qs, wsaServiceDelete, 0)
+	if err := wsaSetService(&qs, wsaServiceDelete, 0); err != nil {
+		return err
+	}
+	l.svcRegDone.Store(false)
+	return nil
 }
 
 type wsaSetServiceOp uint32
@@ -378,9 +384,9 @@ const (
 )
 
 func wsaSetService(qs *windows.WSAQUERYSET, op wsaSetServiceOp, flags uint32) error {
-	r0, _, _ := procWSASetServiceW.Call(uintptr(unsafe.Pointer(qs)), uintptr(op), uintptr(flags))
+	r0, _, callErr := procWSASetServiceW.Call(uintptr(unsafe.Pointer(qs)), uintptr(op), uintptr(flags))
 	if int32(r0) == -1 {
-		return wsaLastErr()
+		return winsockCallErr(callErr)
 	}
 	return nil
 }

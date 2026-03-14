@@ -7,7 +7,6 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	core "github.com/yttydcs/myflowhub-core"
 )
@@ -30,16 +29,7 @@ func NewRFCOMMConnection(pipe core.IPipe, local, remote net.Addr) (*rfcommConnec
 	if pipe == nil {
 		return nil, errors.New("nil pipe")
 	}
-	id := ""
-	if local != nil && remote != nil && local.String() != "" && remote.String() != "" {
-		id = fmt.Sprintf("%s->%s", local.String(), remote.String())
-	} else if remote != nil && remote.String() != "" {
-		id = fmt.Sprintf("->%s", remote.String())
-	}
-	if id == "" {
-		seq := rfcommConnSeq.Add(1)
-		id = fmt.Sprintf("rfcomm#%d@%d", seq, time.Now().UnixNano())
-	}
+	id := fmt.Sprintf("rfcomm#%d", rfcommConnSeq.Add(1))
 	return &rfcommConnection{
 		pipe:   pipe,
 		id:     id,
@@ -61,7 +51,11 @@ func (c *rfcommConnection) Close() error { return c.pipe.Close() }
 
 func (c *rfcommConnection) OnReceive(h core.ReceiveHandler) { c.mu.Lock(); c.recvH = h; c.mu.Unlock() }
 
-func (c *rfcommConnection) SetMeta(key string, val any) { c.mu.Lock(); c.meta[key] = val; c.mu.Unlock() }
+func (c *rfcommConnection) SetMeta(key string, val any) {
+	c.mu.Lock()
+	c.meta[key] = val
+	c.mu.Unlock()
+}
 
 func (c *rfcommConnection) GetMeta(key string) (any, bool) {
 	c.mu.RLock()
@@ -111,4 +105,3 @@ func (c *rfcommConnection) SendWithHeader(hdr core.IHeader, payload []byte, code
 	_, err = c.pipe.Write(frame)
 	return err
 }
-
