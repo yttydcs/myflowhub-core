@@ -88,6 +88,34 @@ func sockaddrBthFromRaw(raw *windows.RawSockaddrBth) sockaddrBth {
 	}
 }
 
+func newDialLocalSockaddrBth() *windows.SockaddrBth {
+	return &windows.SockaddrBth{}
+}
+
+func newDialRemoteSockaddrBth(btAddr uint64, serviceClass windows.GUID, channel int) *windows.SockaddrBth {
+	sa := &windows.SockaddrBth{BtAddr: btAddr}
+	if channel > 0 {
+		sa.Port = uint32(channel)
+		return sa
+	}
+	sa.ServiceClassId = serviceClass
+	return sa
+}
+
+func newDialAddrFromSockaddr(raw *sockaddrBth, uuid string, fallbackChannel int) *Addr {
+	addr := &Addr{UUID: uuid, Channel: fallbackChannel, Role: "dial"}
+	if raw == nil {
+		return addr
+	}
+	if raw.BtAddr != 0 {
+		addr.BDAddr = bthAddrToBDAddr(raw.BtAddr)
+	}
+	if raw.Port > 0 {
+		addr.Channel = int(raw.Port)
+	}
+	return addr
+}
+
 func acceptSock(s windows.Handle) (windows.Handle, *sockaddrBth, error) {
 	var raw windows.RawSockaddrBth
 	l := int32(unsafe.Sizeof(raw))
@@ -197,17 +225,16 @@ func dialNative(ctx context.Context, opts DialOptions) (core.IPipe, net.Addr, ne
 		}
 	}()
 
-	sa := &windows.SockaddrBth{BtAddr: btAddr}
-	if opts.Channel > 0 {
-		sa.Port = uint32(opts.Channel)
-		// ServiceClass left zero -> channel-first.
-	} else {
-		sa.Port = 0
-		sa.ServiceClassId = g
+	// Windows RFCOMM client sockets must bind a local BT_PORT_ANY endpoint before connect,
+	// otherwise winsock may surface WSAEADDRINUSE/WSAENOTCONN during client dial/send.
+	localBind := newDialLocalSockaddrBth()
+	if err := windows.Bind(s, localBind); err != nil {
+		return nil, nil, nil, err
 	}
+	remoteSockaddr := newDialRemoteSockaddrBth(btAddr, g, opts.Channel)
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- windows.Connect(s, sa) }()
+	go func() { errCh <- windows.Connect(s, remoteSockaddr) }()
 
 	select {
 	case <-ctx.Done():
@@ -222,7 +249,8 @@ func dialNative(ctx context.Context, opts DialOptions) (core.IPipe, net.Addr, ne
 	pipe := &winSockPipe{sock: s}
 	s = windows.InvalidHandle // transferred to pipe
 
-	local := &Addr{UUID: uuid, Channel: opts.Channel, Role: "dial"}
+	localSockaddr, _ := getsocknameBth(pipe.sock)
+	local := newDialAddrFromSockaddr(localSockaddr, uuid, 0)
 	remote := &Addr{BDAddr: bd, UUID: uuid, Channel: opts.Channel, Role: "dial"}
 	return pipe, local, remote, nil
 }
