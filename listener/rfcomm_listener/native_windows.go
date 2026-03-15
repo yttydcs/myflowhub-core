@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strings"
@@ -37,6 +38,8 @@ var (
 	procAccept         = ws2_32.NewProc("accept")
 	procGetsockname    = ws2_32.NewProc("getsockname")
 	procWSASetServiceW = ws2_32.NewProc("WSASetServiceW")
+	wsaRecvFn          = windows.WSARecv
+	wsaSendFn          = windows.WSASend
 )
 
 var wsaOnce sync.Once
@@ -155,8 +158,16 @@ func (p *winSockPipe) Read(b []byte) (int, error) {
 		Len: uint32(len(b)),
 		Buf: &b[0],
 	}
-	if err := windows.WSARecv(p.sock, &buf, 1, &recvd, &flags, nil, nil); err != nil {
+	if err := wsaRecvFn(p.sock, &buf, 1, &recvd, &flags, nil, nil); err != nil {
+		// Some providers may report partial read with EMSGSIZE; preserve the consumed bytes.
+		if recvd > 0 && errors.Is(err, windows.WSAEMSGSIZE) {
+			return int(recvd), nil
+		}
 		return int(recvd), err
+	}
+	// RFCOMM socket closes gracefully with 0-byte recv, which should map to EOF for io.Reader contract.
+	if recvd == 0 {
+		return 0, io.EOF
 	}
 	return int(recvd), nil
 }
@@ -165,15 +176,70 @@ func (p *winSockPipe) Write(b []byte) (int, error) {
 	if len(b) == 0 {
 		return 0, nil
 	}
+	n, err := p.writeOnce(b)
+	if err == nil || !errors.Is(err, windows.WSAEMSGSIZE) {
+		return n, err
+	}
+	if n >= len(b) {
+		return n, nil
+	}
+	return p.writeWithMsgSizeFallback(b, n)
+}
+
+func (p *winSockPipe) writeOnce(b []byte) (int, error) {
 	var sent uint32
 	buf := windows.WSABuf{
 		Len: uint32(len(b)),
 		Buf: &b[0],
 	}
-	if err := windows.WSASend(p.sock, &buf, 1, &sent, 0, nil, nil); err != nil {
+	if err := wsaSendFn(p.sock, &buf, 1, &sent, 0, nil, nil); err != nil {
 		return int(sent), err
 	}
 	return int(sent), nil
+}
+
+func (p *winSockPipe) writeWithMsgSizeFallback(b []byte, offset int) (int, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	total := offset
+	remaining := len(b) - total
+	if remaining <= 0 {
+		return total, nil
+	}
+
+	chunk := remaining / 2
+	if chunk > 512 {
+		chunk = 512
+	}
+	if chunk < 1 {
+		chunk = 1
+	}
+
+	for total < len(b) {
+		end := total + chunk
+		if end > len(b) {
+			end = len(b)
+		}
+		n, err := p.writeOnce(b[total:end])
+		if n > 0 {
+			total += n
+		}
+		if err != nil {
+			if errors.Is(err, windows.WSAEMSGSIZE) && n == 0 && chunk > 1 {
+				chunk /= 2
+				if chunk < 1 {
+					chunk = 1
+				}
+				continue
+			}
+			return total, err
+		}
+		if n == 0 {
+			return total, io.ErrShortWrite
+		}
+	}
+	return total, nil
 }
 
 func (p *winSockPipe) Close() error {
