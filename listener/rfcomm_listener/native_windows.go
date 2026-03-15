@@ -25,7 +25,9 @@ const (
 	bthprotoRFCOMM = 3  // BTHPROTO_RFCOMM
 
 	winRFCOMMReadChunkBytes  = 2048
-	winRFCOMMWriteChunkBytes = 256
+	winRFCOMMWriteChunkBytes = 127
+	winRFCOMMSendTimeoutMs   = 8000
+	soSndTimeout             = 0x1005 // SO_SNDTIMEO (x/sys/windows currently未导出)
 )
 
 type sockaddrBth struct {
@@ -143,6 +145,13 @@ func getsocknameBth(s windows.Handle) (*sockaddrBth, error) {
 	}
 	sa := sockaddrBthFromRaw(&raw)
 	return &sa, nil
+}
+
+func setSockSendTimeout(s windows.Handle, timeoutMs int) {
+	if s == windows.InvalidHandle || timeoutMs <= 0 {
+		return
+	}
+	_ = windows.SetsockoptInt(s, windows.SOL_SOCKET, soSndTimeout, timeoutMs)
 }
 
 type winSockPipe struct {
@@ -332,7 +341,7 @@ func dialNative(ctx context.Context, opts DialOptions) (core.IPipe, net.Addr, ne
 		return nil, nil, nil, err
 	}
 
-	s, err := windows.WSASocket(afBth, sockStream, bthprotoRFCOMM, nil, 0, 0)
+	s, err := windows.WSASocket(afBth, sockStream, bthprotoRFCOMM, nil, 0, windows.WSA_FLAG_OVERLAPPED)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -363,6 +372,7 @@ func dialNative(ctx context.Context, opts DialOptions) (core.IPipe, net.Addr, ne
 			return nil, nil, nil, err
 		}
 	}
+	setSockSendTimeout(s, winRFCOMMSendTimeoutMs)
 
 	pipe := &winSockPipe{sock: s}
 	s = windows.InvalidHandle // transferred to pipe
@@ -384,7 +394,7 @@ func listenNative(opts Options) (nativeListener, error) {
 	}
 	name, _ := windows.UTF16PtrFromString("MyFlowHub")
 
-	s, err := windows.WSASocket(afBth, sockStream, bthprotoRFCOMM, nil, 0, 0)
+	s, err := windows.WSASocket(afBth, sockStream, bthprotoRFCOMM, nil, 0, windows.WSA_FLAG_OVERLAPPED)
 	if err != nil {
 		return nil, err
 	}
@@ -443,6 +453,7 @@ func (l *winListener) Accept() (core.IPipe, net.Addr, net.Addr, error) {
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	setSockSendTimeout(nfd, winRFCOMMSendTimeoutMs)
 	pipe := &winSockPipe{sock: nfd}
 
 	remoteBD := ""
