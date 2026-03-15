@@ -90,8 +90,7 @@ func (c *rfcommConnection) DispatchReceive(h core.IHeader, payload []byte) {
 }
 
 func (c *rfcommConnection) Send(data []byte) error {
-	_, err := c.pipe.Write(data)
-	return err
+	return core.WriteAll(c.pipe, data)
 }
 
 func (c *rfcommConnection) SendWithHeader(hdr core.IHeader, payload []byte, codec core.IHeaderCodec) error {
@@ -102,6 +101,5 @@ func (c *rfcommConnection) SendWithHeader(hdr core.IHeader, payload []byte, code
 	if err != nil {
 		return err
 	}
-	_, err = c.pipe.Write(frame)
-	return err
+	return core.WriteAll(c.pipe, frame)
 }

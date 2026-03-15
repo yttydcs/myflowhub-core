@@ -82,8 +82,7 @@ func (w *connWriter) write(task sendTask) error {
 		return WriteFrame(pipe, task.codec, core.Frame{Header: task.hdr, Payload: task.payload})
 	}
 	// payload assumed encoded already
-	_, err := pipe.Write(task.payload)
-	return err
+	return core.WriteAll(pipe, task.payload)
 }
 
 func (w *connWriter) enqueue(task sendTask) (err error) {

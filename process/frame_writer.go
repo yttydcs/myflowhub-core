@@ -3,7 +3,6 @@ package process
 import (
 	"encoding/binary"
 	"io"
-	"net"
 
 	core "github.com/yttydcs/myflowhub-core"
 	"github.com/yttydcs/myflowhub-core/header"
@@ -34,8 +33,7 @@ func WriteFrame(dst io.Writer, codec core.IHeaderCodec, frame core.Frame) error 
 		if err != nil {
 			return err
 		}
-		_, err = dst.Write(encoded)
-		return err
+		return core.WriteAll(dst, encoded)
 	}
 }
 
@@ -64,10 +62,5 @@ func writeTCPFrame(dst io.Writer, _ header.HeaderTcpCodec, frame core.Frame) err
 	binary.BigEndian.PutUint32(buf[20:24], tcpHdr.TraceID)
 	binary.BigEndian.PutUint32(buf[24:28], tcpHdr.Timestamp)
 	binary.BigEndian.PutUint32(buf[28:32], tcpHdr.PayloadLen)
-	if len(frame.Payload) == 0 {
-		_, err := dst.Write(buf)
-		return err
-	}
-	_, err := (&net.Buffers{buf, frame.Payload}).WriteTo(dst)
-	return err
+	return core.WriteAllBuffers(dst, buf, frame.Payload)
 }
