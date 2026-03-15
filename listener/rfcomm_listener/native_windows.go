@@ -23,6 +23,9 @@ const (
 	afBth          = 32 // AF_BTH
 	sockStream     = 1  // SOCK_STREAM
 	bthprotoRFCOMM = 3  // BTHPROTO_RFCOMM
+
+	winRFCOMMReadChunkBytes  = 2048
+	winRFCOMMWriteChunkBytes = 256
 )
 
 type sockaddrBth struct {
@@ -146,36 +149,85 @@ type winSockPipe struct {
 	sock windows.Handle
 	// closed==1 means sock already closed.
 	closed atomic.Uint32
+
+	readMu      sync.Mutex
+	readCache   []byte
+	readScratch []byte
 }
 
 func (p *winSockPipe) Read(b []byte) (int, error) {
 	if len(b) == 0 {
 		return 0, nil
 	}
+	p.readMu.Lock()
+	defer p.readMu.Unlock()
+
+	if len(p.readCache) == 0 {
+		if err := p.fillReadCacheLocked(); err != nil {
+			return 0, err
+		}
+	}
+
+	n := copy(b, p.readCache)
+	p.readCache = p.readCache[n:]
+	if len(p.readCache) == 0 {
+		p.readCache = nil
+	}
+	return n, nil
+}
+
+func (p *winSockPipe) fillReadCacheLocked() error {
+	if cap(p.readScratch) < winRFCOMMReadChunkBytes {
+		p.readScratch = make([]byte, winRFCOMMReadChunkBytes)
+	}
+	bufData := p.readScratch[:winRFCOMMReadChunkBytes]
 	var recvd uint32
 	flags := uint32(0)
 	buf := windows.WSABuf{
-		Len: uint32(len(b)),
-		Buf: &b[0],
+		Len: uint32(len(bufData)),
+		Buf: &bufData[0],
 	}
 	if err := wsaRecvFn(p.sock, &buf, 1, &recvd, &flags, nil, nil); err != nil {
 		// Some providers may report partial read with EMSGSIZE; preserve the consumed bytes.
 		if recvd > 0 && errors.Is(err, windows.WSAEMSGSIZE) {
-			return int(recvd), nil
+			p.readCache = append(p.readCache[:0], bufData[:int(recvd)]...)
+			return nil
 		}
-		return int(recvd), err
+		return err
 	}
 	// RFCOMM socket closes gracefully with 0-byte recv, which should map to EOF for io.Reader contract.
 	if recvd == 0 {
-		return 0, io.EOF
+		return io.EOF
 	}
-	return int(recvd), nil
+	p.readCache = append(p.readCache[:0], bufData[:int(recvd)]...)
+	return nil
 }
 
 func (p *winSockPipe) Write(b []byte) (int, error) {
 	if len(b) == 0 {
 		return 0, nil
 	}
+	total := 0
+	for total < len(b) {
+		end := total + winRFCOMMWriteChunkBytes
+		if end > len(b) {
+			end = len(b)
+		}
+		n, err := p.writeChunkWithFallback(b[total:end])
+		if n > 0 {
+			total += n
+		}
+		if err != nil {
+			return total, err
+		}
+		if n == 0 {
+			return total, io.ErrShortWrite
+		}
+	}
+	return total, nil
+}
+
+func (p *winSockPipe) writeChunkWithFallback(b []byte) (int, error) {
 	n, err := p.writeOnce(b)
 	if err == nil || !errors.Is(err, windows.WSAEMSGSIZE) {
 		return n, err
@@ -209,8 +261,8 @@ func (p *winSockPipe) writeWithMsgSizeFallback(b []byte, offset int) (int, error
 	}
 
 	chunk := remaining / 2
-	if chunk > 512 {
-		chunk = 512
+	if chunk > winRFCOMMWriteChunkBytes {
+		chunk = winRFCOMMWriteChunkBytes
 	}
 	if chunk < 1 {
 		chunk = 1

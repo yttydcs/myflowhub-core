@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -140,5 +141,74 @@ func TestWinSockPipeWriteFallbackOnMsgSize(t *testing.T) {
 	}
 	if calls < 2 {
 		t.Fatalf("send calls = %d, want >= 2 (fallback expected)", calls)
+	}
+}
+
+func TestWinSockPipeReadCachesPacketForSmallReads(t *testing.T) {
+	orig := wsaRecvFn
+	defer func() { wsaRecvFn = orig }()
+
+	packet := []byte("abcdefghijkl")
+	recvCalls := 0
+	wsaRecvFn = func(_ windows.Handle, buf *windows.WSABuf, _ uint32, recvd *uint32, _ *uint32, _ *windows.Overlapped, _ *byte) error {
+		recvCalls++
+		copy(unsafe.Slice(buf.Buf, int(buf.Len)), packet)
+		*recvd = uint32(len(packet))
+		return nil
+	}
+
+	p := &winSockPipe{}
+	part1 := make([]byte, 4)
+	n1, err := p.Read(part1)
+	if err != nil {
+		t.Fatalf("first read err = %v, want nil", err)
+	}
+	if n1 != 4 || string(part1) != "abcd" {
+		t.Fatalf("first read got n=%d data=%q", n1, string(part1))
+	}
+
+	part2 := make([]byte, 8)
+	n2, err := p.Read(part2)
+	if err != nil {
+		t.Fatalf("second read err = %v, want nil", err)
+	}
+	if n2 != 8 || string(part2) != "efghijkl" {
+		t.Fatalf("second read got n=%d data=%q", n2, string(part2))
+	}
+
+	if recvCalls != 1 {
+		t.Fatalf("recv calls = %d, want 1 (cached reads expected)", recvCalls)
+	}
+}
+
+func TestWinSockPipeWriteUsesBoundedChunks(t *testing.T) {
+	orig := wsaSendFn
+	defer func() { wsaSendFn = orig }()
+
+	maxChunk := 0
+	sendCalls := 0
+	wsaSendFn = func(_ windows.Handle, buf *windows.WSABuf, _ uint32, sent *uint32, _ uint32, _ *windows.Overlapped, _ *byte) error {
+		sendCalls++
+		if int(buf.Len) > maxChunk {
+			maxChunk = int(buf.Len)
+		}
+		*sent = buf.Len
+		return nil
+	}
+
+	p := &winSockPipe{}
+	payload := make([]byte, winRFCOMMWriteChunkBytes*3+17)
+	n, err := p.Write(payload)
+	if err != nil {
+		t.Fatalf("write err = %v, want nil", err)
+	}
+	if n != len(payload) {
+		t.Fatalf("write n = %d, want %d", n, len(payload))
+	}
+	if maxChunk > winRFCOMMWriteChunkBytes {
+		t.Fatalf("max chunk = %d, want <= %d", maxChunk, winRFCOMMWriteChunkBytes)
+	}
+	if sendCalls < 4 {
+		t.Fatalf("send calls = %d, want >= 4", sendCalls)
 	}
 }
