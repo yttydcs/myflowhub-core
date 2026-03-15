@@ -1,74 +1,90 @@
-# Plan - Core：修复 Windows RFCOMM Dial 前置 Bind
+# Plan - Core：发布 v0.4.2
 
 ## Workflow 信息
 - Repo：`MyFlowHub-Core`
-- 分支：`fix/windows-rfcomm-dial-bind`
-- Worktree：`d:\project\MyFlowHub3\worktrees\windows-rfcomm-dial-bind`
+- 分支：`chore/core-v0.4.2-release`
+- Worktree：`d:\project\MyFlowHub3\worktrees\core-v0.4.2-release`
 - Base：`master`
-- 范围：仅修复 Core 的 Windows RFCOMM client dial 建链逻辑；不改 Win UI、SDK API、Server 协议语义
+- 范围：仅完成 `v0.4.2` 补丁版本发布归档、审计与 tag；不新增实现逻辑
 
 ## 项目目标与当前状态
 - 目标：
-  - 修复 Windows 作为 RFCOMM dial/client 时，连接已被服务端 accept 但客户端仍报 `Only one usage of each socket address...` 或后续 `socket is not connected` 的问题；
-  - 保持 endpoint 规范不变：继续使用 `bt+rfcomm://<bdaddr>?uuid=...&channel=...`；
-  - 为 Win 侧后续重新发布提供稳定 Core 修复基线。
+  - 将已合并到 `master` 的 Windows RFCOMM dial 前置 bind 修复发布为 `v0.4.2`；
+  - 补齐可审计的发布计划与归档文档；
+  - 为下游 `MyFlowHub-Win` 升级依赖提供稳定版本锚点。
 - 当前状态：
-  - Server 侧 RFCOMM listener 已能启动并 accept 到来自 Windows 客户端的连接；
-  - Win 客户端在 `Session.Connect -> SDK Session.ConnectEndpoint -> Core rfcomm_listener.DialEndpoint -> native_windows.go:dialNative` 链路中失败；
-  - 根据 Microsoft Bluetooth/Winsock 文档，RFCOMM 客户端在 `connect` 前应先 `bind` 本地 `SOCKADDR_BTH{btAddr=0, serviceClassId=GUID_NULL, port=0}`，当前实现缺失该步骤。
+  - `master` 已包含 Windows RFCOMM listener 修复与 Windows RFCOMM dial 修复；
+  - 自动化验证 `GOWORK=off go test ./... -count=1` 已通过；
+  - 最新已发布 tag 为 `v0.4.1`，本轮需要新增 `v0.4.2`。
 
 ## 可执行任务清单（Checklist）
 
-### WIN-DIAL-1 - 修正 Windows RFCOMM client dial 建链流程
+### CORE-REL-1 - 审计发布基线
 - 目标：
-  - 在 `dialNative` 中补齐本地 `bind(BT_PORT_ANY)`；
-  - 明确区分“本地 bind 地址”和“远端 connect 地址”；
-  - 回填本地地址信息，便于日志和诊断。
+  - 确认 `master` 上将被发布的提交、已有 tag、验证记录与发布范围。
 - 涉及模块 / 文件：
-  - `listener/rfcomm_listener/native_windows.go`
-- 验收条件：
-  - `dialNative` 在 `connect` 前完成本地 `windows.Bind`；
-  - channel-first/uuid-first 两种 remote sockaddr 构造仍正确；
-  - 不改外部 endpoint/API。
-- 测试点：
-  - Windows 编译与单测通过；
-  - 结构性测试覆盖本地/远端 sockaddr 构造逻辑。
-- 回滚点：
-  - 回退 `native_windows.go` 改动。
-
-### WIN-DIAL-2 - 补充稳定单测
-- 目标：
-  - 把本轮修复抽成可稳定测试的 helper，避免依赖真实蓝牙硬件。
-- 涉及模块 / 文件：
-  - `listener/rfcomm_listener/native_windows.go`
-  - `listener/rfcomm_listener/native_windows_test.go`
-- 验收条件：
-  - 单测覆盖 client local bind sockaddr = `btAddr=0 / port=0 / guid=zero`；
-  - 单测覆盖 remote connect sockaddr 在 `channel>0` 与 `channel=0` 时的构造差异。
-- 测试点：
-  - `go test ./listener/rfcomm_listener -count=1`
-- 回滚点：
-  - 回退 helper 与测试变更。
-
-### WIN-DIAL-3 - Code Review 与归档
-- 目标：
-  - 补充变更归档、验证记录与逐项审查结论。
-- 涉及模块 / 文件：
-  - `plan.md`
+  - `git tag`
+  - `git log`
   - `docs/change/2026-03-14_windows-rfcomm-dial-bind.md`
 - 验收条件：
-  - 文档覆盖背景、根因、变更、验证、影响、回滚；
-  - Review 结论完整。
+  - 明确 `v0.4.2` 基于的提交；
+  - 明确本次为补丁发布，不新增代码实现。
 - 测试点：
-  - 审查项全部有明确结论。
+  - `git tag --sort=version:refname`
+  - `git log --oneline`
 - 回滚点：
-  - 回退文档提交。
+  - 无代码改动，可放弃本次发布流程。
+
+### CORE-REL-2 - 维护发布计划与归档
+- 目标：
+  - 让本次版本发布具备独立 `plan.md` 与 `docs/change` 文档，便于交接和追踪。
+- 涉及模块 / 文件：
+  - `plan.md`
+  - `docs/change/2026-03-15_core-v0.4.2-release.md`
+- 验收条件：
+  - 文档覆盖背景、内容、任务映射、验证、影响、回滚；
+  - 文档明确 `v0.4.2` 包含 Windows RFCOMM dial 修复补丁。
+- 测试点：
+  - 文档内容可独立理解并执行发布动作。
+- 回滚点：
+  - 回退新增文档提交。
+
+### CORE-REL-3 - 执行 tag 与远端发布准备
+- 目标：
+  - 在审核通过后为 `master` 创建并推送 `v0.4.2` annotated tag。
+- 涉及模块 / 文件：
+  - Git tag / remote refs
+- 验收条件：
+  - `origin/master` 上存在 `v0.4.2`；
+  - tag 指向已验证的修复提交。
+- 测试点：
+  - `git show v0.4.2`
+  - `git ls-remote --tags origin`
+- 回滚点：
+  - `git tag -d v0.4.2`
+  - `git push origin :refs/tags/v0.4.2`
+
+### CORE-REL-4 - Code Review 与收敛
+- 目标：
+  - 逐项审查发布范围、可维护性、稳定性与验证证据；
+  - 确认可供下游升级。
+- 涉及模块 / 文件：
+  - `plan.md`
+  - `docs/change/2026-03-15_core-v0.4.2-release.md`
+- 验收条件：
+  - Review 结论完整；
+  - 发布动作与回滚动作明确。
+- 测试点：
+  - Review 逐项结论明确。
+- 回滚点：
+  - 修订文档或取消发布。
 
 ## 依赖关系
-- `WIN-DIAL-1` 完成后进入 `WIN-DIAL-2`
-- `WIN-DIAL-2` 完成后进入 `WIN-DIAL-3`
+- `CORE-REL-1` 完成后进入 `CORE-REL-2`
+- `CORE-REL-2` 与 Review 完成后才能执行 `CORE-REL-3`
+- `CORE-REL-3` 完成后进入 `CORE-REL-4`
 
 ## 风险与注意事项
-- 当前环境缺少真实蓝牙自动化链路，本轮必须把关键逻辑抽成可单测 helper；
-- 只修建链流程，不扩大到 Session 生命周期与 UI 重连策略；
-- 若修复后仍存在“连接后断开/注册卡住”，应另起 workflow 分析读写或子协议问题。
+- `v0.4.2` 是补丁发布，禁止夹带新的实现性修改；
+- tag 一旦推送即成为下游版本锚点，必须先完成文档与验证记录；
+- 本轮仅面向 `MyFlowHub-Win` 对齐，不同步调整其他下游仓库。
