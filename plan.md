@@ -1,121 +1,99 @@
-# Plan - Core：修复 RFCOMM 字节流短写导致的半帧阻塞
+# Plan - Core：修复 Windows RFCOMM 连接后中止（10053）
 
 ## Workflow 信息
 - Repo：`MyFlowHub-Core`
-- 分支：`fix/rfcomm-write-contract`
-- Worktree：`d:\project\MyFlowHub3\worktrees\fix-rfcomm-write-contract\repo\MyFlowHub-Core`
+- 分支：`fix/rfcomm-win-abort`
+- Worktree：`d:\project\MyFlowHub3\worktrees\fix-rfcomm-win-abort\repo\MyFlowHub-Core`
 - Base：`master`
-- 关联仓库：
-  - `MyFlowHub-SDK`
-  - `MyFlowHub-Win`
+- 关联仓库（后续可能需要发版对齐）：`MyFlowHub-SDK`、`MyFlowHub-Win`
 
 ## 项目目标与当前状态
 - 目标：
-  - 修复 RFCOMM 连接上发送帧时未保证“写满整帧”导致的半帧阻塞问题；
-  - 将“整帧写出契约”下沉到传输/帧写出层，而不是业务子协议层；
-  - 为后续串口、USB、命名管道等非 TCP 字节流承载提供统一可靠的写出语义。
+  - 修复 Windows RFCOMM 在“已连接后首次业务交互（register/login）”阶段出现的连接中止问题；
+  - 保持现有 Pipe/Router/SubProto 抽象和协议语义不变；
+  - 将修复收敛在 transport 层，避免业务层分叉补丁。
 - 当前状态：
-  - `HeaderTcpCodec.Decode` 按完整头和完整 payload 阻塞读取；
-  - Core 发送路径对 `io.Writer` / `IPipe` 默认只写一次；
-  - Windows RFCOMM `WSASend` 可能短写，导致接收端卡在半帧读取；
-  - 现象已在真实 Win RFCOMM 注册流程中复现：连接成功、发送 register 后长时间无回包。
+  - Win 客户端可完成 RFCOMM 建链，Server 侧能看到 `new connection`；
+  - 但注册/登录阶段 Win 报 `An established connection was aborted by the software in your host machine`（典型 10053）；
+  - 现网证据显示连接关闭链路可观测性不足，且 Windows socket 读写边界语义存在风险点。
 
 ## 范围
 - 必须：
-  - 为 Core 引入统一的“写满字节流”能力；
-  - 修复 Core 内所有帧写出路径的短写风险；
-  - 补充短写场景测试。
+  - 修复 Windows RFCOMM `Read` 在 0 字节返回时的 EOF 语义；
+  - 增强 Windows RFCOMM `Write` 对 `WSAEMSGSIZE` 的兼容写出策略（不改上层协议）；
+  - 补充单测覆盖上述边界路径；
+  - 提升错误语义可诊断性（至少可区分 EOF/消息尺寸错误）。
 - 可选：
-  - 对零拷贝路径保留现有优化，只在必要时补写；
-  - 增加更明确的短写错误语义与日志。
+  - 在不增加业务层耦合前提下，补充最小必要的 transport 日志或错误包装信息。
 - 不做：
-  - 不修改 auth 子协议语义；
-  - 不修改路由决策与 header 结构；
-  - 不引入 payload 解析增强。
+  - 不改 Auth/VarStore 等子协议处理逻辑；
+  - 不改 HeaderTcp 格式与路由规则；
+  - 不引入按 payload 深解析的全链路开销。
 
 ## 可执行任务清单（Checklist）
 
-### CORE-RFCOMM-1 - 收敛统一写出契约
+### WIN-RFCOMM-ABORT-1 - 修正 Windows RFCOMM 读写边界语义
 - 目标：
-  - 在 Core 的传输/帧写出层提供统一的 `write-full` 能力，保证完整帧发送完成后才返回。
+  - 修复 `Read` 0 字节返回导致的“非 EOF”行为；
+  - 为 `Write` 增加 `WSAEMSGSIZE` 兼容写出策略，保障大帧可持续发送。
 - 涉及模块 / 文件：
-  - `process/frame_writer.go`
-  - `frame.go`
-  - 新增或调整共享写出辅助文件
+  - `listener/rfcomm_listener/native_windows.go`
 - 验收条件：
-  - 帧写出逻辑对普通 `io.Writer` 与 `IPipe` 都能正确处理短写；
-  - 不要求 transport 层自行保证一次写满。
+  - `Read` 在连接正常关闭时返回 `io.EOF`；
+  - `Write` 在遇到消息尺寸限制时可降级分片发送（或返回明确错误，不再静默失败）；
+  - 不影响 TCP / Linux / Android 路径。
 - 测试点：
-  - 使用故意短写的 fake writer 验证完整帧最终被写完；
-  - 保留现有 TCP header 编码兼容性。
+  - Windows 单测：EOF 语义；
+  - Windows 单测：`WSAEMSGSIZE` 触发下的降级写出。
 - 回滚点：
-  - 回退新增写出辅助实现与调用点。
+  - 回退 `native_windows.go` 改动。
 
-### CORE-RFCOMM-2 - 修复 RFCOMM 连接直接发送路径
+### WIN-RFCOMM-ABORT-2 - 补充可回归测试
 - 目标：
-  - 让 `rfcommConnection.Send` / `SendWithHeader` 与发送调度器使用同一写出契约，避免 listener / direct send 分叉。
+  - 用可重复测试覆盖这次缺陷路径，防止回归。
 - 涉及模块 / 文件：
-  - `listener/rfcomm_listener/connection.go`
-  - `process/senddispatcher.go`
+  - `listener/rfcomm_listener/native_windows_test.go`
 - 验收条件：
-  - RFCOMM 连接上的原始发送与带 header 发送都不再依赖单次 `Write` 成功；
-  - 不引入新的并发写风险。
+  - 新增用例稳定通过，且不依赖真实蓝牙硬件；
+  - 现有 RFCOMM listener 单测不退化。
 - 测试点：
-  - fake pipe 短写测试；
-  - 回归现有发送调度器测试。
+  - `go test ./listener/rfcomm_listener -count=1`
 - 回滚点：
-  - 回退 RFCOMM connection 与 send dispatcher 的写出调用调整。
+  - 回退新增测试用例。
 
-### CORE-RFCOMM-3 - 补充回归测试
+### WIN-RFCOMM-ABORT-3 - Code Review（强制）
 - 目标：
-  - 增加能稳定复现“短写 + 半帧阻塞”风险的单测，防止后续回归。
-- 涉及模块 / 文件：
-  - `process/*_test.go`
-  - `listener/rfcomm_listener/*_test.go`（如有必要）
-- 验收条件：
-  - 覆盖至少：
-    - 普通编码路径短写；
-    - HeaderTcp 零拷贝路径短写；
-    - RFCOMM connection 直接发送短写。
-- 测试点：
-  - `go test ./process ./listener/rfcomm_listener -count=1`
-- 回滚点：
-  - 删除新增测试文件/用例。
-
-### CORE-RFCOMM-4 - Code Review（强制）
-- 目标：
-  - 审查需求覆盖、分层位置、性能影响、错误处理与测试充分性。
+  - 对需求覆盖、分层合理性、性能影响、错误处理与测试充分性做逐项评审。
 - 涉及模块 / 文件：
   - 本 workflow 全部改动文件
 - 验收条件：
-  - 明确逐项通过/不通过结论；
-  - 若发现问题，返回实现阶段修正。
+  - 输出逐项“通过/不通过”；
+  - 不通过项必须回到实现阶段修正。
 - 测试点：
-  - Review 结论完整可审计。
+  - 评审结论完整可审计。
 - 回滚点：
   - 修订实现或取消发布。
 
-### CORE-RFCOMM-5 - 归档与发版准备
+### WIN-RFCOMM-ABORT-4 - 归档与发布准备
 - 目标：
-  - 形成变更归档，并为新 patch tag 做准备。
+  - 形成 docs/change 归档，供后续 Core/SDK/Win 发版对齐。
 - 涉及模块 / 文件：
-  - `docs/change/2026-03-15_rfcomm-write-contract-fix.md`
+  - `docs/change/2026-03-15_windows-rfcomm-abort-fix.md`（文件名以实际日期为准）
 - 验收条件：
-  - 文档覆盖背景、设计权衡、任务映射、验证结果、影响与回滚；
-  - 明确本次为重大问题修复，但版本建议走 patch。
+  - 文档覆盖背景、任务映射、关键权衡、验证结果、影响与回滚；
+  - 明确本次属于 transport 稳定性修复（patch）。
 - 测试点：
-  - 归档文档可脱离对话独立理解。
+  - 文档可脱离对话独立交接。
 - 回滚点：
-  - 回退新增文档。
+  - 回退归档文档。
 
 ## 依赖关系
-- `CORE-RFCOMM-1` 完成后进入 `CORE-RFCOMM-2`
-- `CORE-RFCOMM-2` 完成后进入 `CORE-RFCOMM-3`
-- `CORE-RFCOMM-3` 完成后进入 `CORE-RFCOMM-4`
-- `CORE-RFCOMM-4` 通过后进入 `CORE-RFCOMM-5`
+- `WIN-RFCOMM-ABORT-1` 完成后进入 `WIN-RFCOMM-ABORT-2`
+- `WIN-RFCOMM-ABORT-2` 完成后进入 `WIN-RFCOMM-ABORT-3`
+- `WIN-RFCOMM-ABORT-3` 通过后进入 `WIN-RFCOMM-ABORT-4`
 
 ## 风险与注意事项
-- 写满循环必须正确处理中途返回 `n>0, err!=nil` 的场景，避免重复发送或丢字节；
-- 不能把修复散落到 auth / UI / routing 层，否则会破坏分层并放大维护成本；
-- 需要保留现有 `HeaderTcp` 快路径，避免无意义的额外拷贝；
-- 下游 SDK 仍存在同类单次写问题，本仓修完后仍需继续修复 SDK 才能闭环。
+- 读写语义修复必须遵循 `io.Reader/io.Writer` 约定，避免引入 busy-loop 或重复发送；
+- 分片发送策略不能破坏帧边界语义（Header + Payload 仍由上层编码后作为字节流连续发送）；
+- 不引入 plan 外跨仓改动；若需 SDK/Win 跟进，仅在本仓完成后另建 workflow；
+- 所有行为变化必须可通过日志/错误信息定位。

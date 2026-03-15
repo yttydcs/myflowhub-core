@@ -3,6 +3,8 @@
 package rfcomm_listener
 
 import (
+	"errors"
+	"io"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -89,5 +91,54 @@ func TestNewDialRemoteSockaddrBthUUIDFirst(t *testing.T) {
 	}
 	if sa.ServiceClassId != guid {
 		t.Fatalf("service class = %+v, want %+v", sa.ServiceClassId, guid)
+	}
+}
+
+func TestWinSockPipeReadZeroReturnsEOF(t *testing.T) {
+	orig := wsaRecvFn
+	defer func() { wsaRecvFn = orig }()
+
+	wsaRecvFn = func(_ windows.Handle, _ *windows.WSABuf, _ uint32, recvd *uint32, _ *uint32, _ *windows.Overlapped, _ *byte) error {
+		*recvd = 0
+		return nil
+	}
+
+	p := &winSockPipe{}
+	buf := make([]byte, 8)
+	n, err := p.Read(buf)
+	if n != 0 {
+		t.Fatalf("read n = %d, want 0", n)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("read err = %v, want EOF", err)
+	}
+}
+
+func TestWinSockPipeWriteFallbackOnMsgSize(t *testing.T) {
+	orig := wsaSendFn
+	defer func() { wsaSendFn = orig }()
+
+	calls := 0
+	wsaSendFn = func(_ windows.Handle, buf *windows.WSABuf, _ uint32, sent *uint32, _ uint32, _ *windows.Overlapped, _ *byte) error {
+		calls++
+		if int(buf.Len) > 8 {
+			*sent = 0
+			return windows.WSAEMSGSIZE
+		}
+		*sent = buf.Len
+		return nil
+	}
+
+	p := &winSockPipe{}
+	payload := make([]byte, 32)
+	n, err := p.Write(payload)
+	if err != nil {
+		t.Fatalf("write err = %v, want nil", err)
+	}
+	if n != len(payload) {
+		t.Fatalf("write n = %d, want %d", n, len(payload))
+	}
+	if calls < 2 {
+		t.Fatalf("send calls = %d, want >= 2 (fallback expected)", calls)
 	}
 }
