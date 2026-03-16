@@ -84,3 +84,26 @@
 - 读取缓冲必须避免并发数据竞争与无界增长；
 - 分块写出不能破坏上层帧字节顺序；
 - 出错时优先返回明确错误，避免“静默无响应”。
+
+---
+
+# Plan - Core：QUIC 传输接入（已完成归档）
+
+## Workflow 信息
+- Repo：`MyFlowHub-Core`
+- 分支：`feat/quic-transport-core`
+- Worktree：`d:\project\MyFlowHub3\repo\MyFlowHub-Core\worktrees\feat-quic-transport-core`
+- Base：`master`
+- 关联仓库：`MyFlowHub-SDK`、`MyFlowHub-Server`、`MyFlowHub-Win`
+
+## 目标与结果
+- 目标：新增 QUIC（UDP 家族）传输能力，保持现有 `HeaderTcpCodec + Router + SubProto` 主链路不变。
+- 结果：Core/SDK/Server/Win 已完成接入、依赖收敛、测试验证与发布标签。
+
+## Checklist（完成态）
+- [x] `QUIC-CORE-1` Core 新增 `listener/quic_listener`（listen/dial/connection/endpoint）
+- [x] `QUIC-CORE-2` TLS1.3 + pin_sha256 + mTLS 预留
+- [x] `QUIC-SDK-1` SDK `ConnectEndpoint` 支持 `quic://`
+- [x] `QUIC-SERVER-1` Server Runtime 支持 QUIC listener 与 `quic://` parent endpoint
+- [x] `QUIC-WIN-1` Win 依赖链对齐并验证
+- [x] `QUIC-REL-1` 发布链路：Core `v0.4.7` -> SDK `v0.1.10` -> Server `v0.0.11` -> Win `v0.0.10`
