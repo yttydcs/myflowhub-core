@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"time"
 
 	core "github.com/yttydcs/myflowhub-core"
@@ -16,10 +18,41 @@ import (
 type SelfRegisterOptions struct {
 	ParentAddr  string
 	SelfID      string
+	JoinPermit  string
 	Timeout     time.Duration
 	DialTimeout time.Duration
 	DoLogin     bool
 	Logger      *slog.Logger
+}
+
+// RegisterStatusError reports a non-approved register outcome.
+type RegisterStatusError struct {
+	Code      int
+	Status    string
+	RequestID string
+	Reason    string
+	Msg       string
+}
+
+func (e *RegisterStatusError) Error() string {
+	if e == nil {
+		return "register failed"
+	}
+	detail := strings.TrimSpace(e.Reason)
+	if detail == "" {
+		detail = strings.TrimSpace(e.Msg)
+	}
+	if detail == "" {
+		detail = "register failed"
+	}
+	status := strings.TrimSpace(e.Status)
+	if status == "" {
+		return "register failed: " + detail
+	}
+	if e.RequestID != "" {
+		return fmt.Sprintf("register %s (request_id=%s): %s", status, e.RequestID, detail)
+	}
+	return fmt.Sprintf("register %s: %s", status, detail)
 }
 
 // SelfRegister 通过 SubProto=2 的 register/login 获取 node_id（旧版会返回 credential，现已不要求）。
@@ -55,9 +88,13 @@ func SelfRegister(ctx context.Context, opts SelfRegisterOptions) (uint32, string
 	msgID := uint32(1)
 
 	// register
+	regData := map[string]any{"device_id": opts.SelfID}
+	if strings.TrimSpace(opts.JoinPermit) != "" {
+		regData["join_permit"] = strings.TrimSpace(opts.JoinPermit)
+	}
 	regPayload, _ := json.Marshal(map[string]any{
 		"action": "register",
-		"data":   map[string]any{"device_id": opts.SelfID},
+		"data":   regData,
 	})
 	regHdr := (&header.HeaderTcp{}).
 		WithMajor(header.MajorCmd).
@@ -125,17 +162,53 @@ func parseRegisterResp(_ core.IHeader, body []byte) (uint32, string, error) {
 		return 0, "", err
 	}
 	var resp struct {
-		Code   int    `json:"code"`
-		NodeID uint32 `json:"node_id"`
-		Msg    string `json:"msg"`
+		Code      int    `json:"code"`
+		NodeID    uint32 `json:"node_id"`
+		Msg       string `json:"msg"`
+		Status    string `json:"status"`
+		RequestID string `json:"request_id"`
+		Reason    string `json:"reason"`
 	}
 	if err := json.Unmarshal(msg.Data, &resp); err != nil {
 		return 0, "", err
 	}
-	if resp.Code != 1 || resp.NodeID == 0 {
-		return 0, "", errors.New("register failed: " + resp.Msg)
+	status := strings.ToLower(strings.TrimSpace(resp.Status))
+	switch status {
+	case "approved":
+		if resp.Code != 1 || resp.NodeID == 0 {
+			return 0, "", &RegisterStatusError{
+				Code:      resp.Code,
+				Status:    resp.Status,
+				RequestID: resp.RequestID,
+				Reason:    coalesceRegisterReason(resp.Reason, resp.Msg, "register approved without node_id"),
+				Msg:       resp.Msg,
+			}
+		}
+		return resp.NodeID, "", nil
+	case "pending", "rejected":
+		return 0, "", &RegisterStatusError{
+			Code:      resp.Code,
+			Status:    resp.Status,
+			RequestID: resp.RequestID,
+			Reason:    resp.Reason,
+			Msg:       resp.Msg,
+		}
+	case "":
+		if resp.Code == 1 && resp.NodeID != 0 {
+			return resp.NodeID, "", nil
+		}
+	default:
+		if resp.Code == 1 && resp.NodeID != 0 {
+			return resp.NodeID, "", nil
+		}
 	}
-	return resp.NodeID, "", nil
+	return 0, "", &RegisterStatusError{
+		Code:      resp.Code,
+		Status:    resp.Status,
+		RequestID: resp.RequestID,
+		Reason:    resp.Reason,
+		Msg:       resp.Msg,
+	}
 }
 
 func assertLoginOK(body []byte) error {
@@ -157,4 +230,13 @@ func assertLoginOK(body []byte) error {
 		return errors.New("login failed: " + resp.Msg)
 	}
 	return nil
+}
+
+func coalesceRegisterReason(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

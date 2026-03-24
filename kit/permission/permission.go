@@ -11,11 +11,16 @@ import (
 )
 
 const (
-	Wildcard      = "*"
-	AuthRevoke    = "auth.revoke"
-	VarPrivateSet = "var.private_set"
-	VarRevoke     = "var.revoke"
-	VarSubscribe  = "var.subscribe"
+	Wildcard            = "*"
+	AuthRevoke          = "auth.revoke"
+	AuthPendingList     = "auth.pending.list"
+	AuthRegisterApprove = "auth.register.approve"
+	AuthRegisterReject  = "auth.register.reject"
+	AuthPermitIssue     = "auth.permit.issue"
+	AuthPermitRevoke    = "auth.permit.revoke"
+	VarPrivateSet       = "var.private_set"
+	VarRevoke           = "var.revoke"
+	VarSubscribe        = "var.subscribe"
 )
 
 // Snapshot captures the exported permission state for syncing.
@@ -218,6 +223,44 @@ func (c *Config) ResolvePerms(nodeID uint32) []string {
 		return cloneStrings(perms)
 	}
 	return cloneStrings(c.defaultPerms)
+}
+
+// ResolvePermsForRole returns the permissions currently bound to the supplied role.
+func (c *Config) ResolvePermsForRole(role string) []string {
+	if c == nil {
+		return nil
+	}
+	role = strings.TrimSpace(role)
+	if role == "" {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if perms, ok := c.rolePerms[role]; ok {
+		return cloneStrings(perms)
+	}
+	if role == c.defaultRole {
+		return cloneStrings(c.defaultPerms)
+	}
+	return nil
+}
+
+// HasRole reports whether the supplied role is defined in current permission config.
+func (c *Config) HasRole(role string) bool {
+	if c == nil {
+		return false
+	}
+	role = strings.TrimSpace(role)
+	if role == "" {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if role == c.defaultRole {
+		return true
+	}
+	_, ok := c.rolePerms[role]
+	return ok
 }
 
 // Has reports whether a node can perform the specified permission string.

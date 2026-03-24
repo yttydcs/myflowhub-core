@@ -14,29 +14,33 @@ type MapConfig struct {
 }
 
 const (
-	KeyProcChannelCount     = "process.channel_count"
-	KeyProcWorkersPerChan   = "process.workers_per_channel"
-	KeyProcChannelBuffer    = "process.channel_buffer"
-	KeyAuthDefaultRole      = "auth.default_role"
-	KeyAuthDefaultPerms     = "auth.default_perms"
-	KeyAuthNodeRoles        = "auth.node_roles" // 格式：1:admin;2:node
-	KeyAuthRolePerms        = "auth.role_perms" // 格式：admin:p1,p2;node:p3
-	KeySendChannelCount     = "send.channel_count"
-	KeySendWorkersPerChan   = "send.workers_per_channel"
-	KeySendChannelBuffer    = "send.channel_buffer"
-	KeySendConnBuffer       = "send.conn_buffer"
-	KeySendEnqueueTimeoutMS = "send.enqueue_timeout_ms"
-	KeyRoutingForwardRemote = "routing.forward_remote"
-	KeyProcQueueStrategy    = "process.queue_strategy" // conn|subproto|source_target|roundrobin
-	KeyDefaultForwardEnable = "routing.default_forward_enable"
-	KeyDefaultForwardTarget = "routing.default_forward_target"
-	KeyDefaultForwardMap    = "routing.default_forward_map"
-	KeyParentEnable         = "parent.enable"
-	KeyParentAddr           = "parent.addr"
-	KeyParentReconnectSec   = "parent.reconnect_sec"
-	KeyAuthNodePrivKey      = "auth.node_privkey" // base64 DER p256 private key
-	KeyAuthNodePubKey       = "auth.node_pubkey"  // base64 DER p256 public key
-	KeyAuthTrustedNodes     = "auth.trusted_nodes"
+	KeyProcChannelCount            = "process.channel_count"
+	KeyProcWorkersPerChan          = "process.workers_per_channel"
+	KeyProcChannelBuffer           = "process.channel_buffer"
+	KeyAuthDefaultRole             = "auth.default_role"
+	KeyAuthDefaultPerms            = "auth.default_perms"
+	KeyAuthNodeRoles               = "auth.node_roles" // 格式：1:admin;2:node
+	KeyAuthRolePerms               = "auth.role_perms" // 格式：admin:p1,p2;node:p3
+	KeyAuthRegisterRequireApproval = "auth.register.require_approval"
+	KeyAuthRegisterPendingTTLSec   = "auth.register.pending_ttl_sec"
+	KeyAuthRegisterPermitTTLSec    = "auth.register.permit_ttl_sec"
+	KeySendChannelCount            = "send.channel_count"
+	KeySendWorkersPerChan          = "send.workers_per_channel"
+	KeySendChannelBuffer           = "send.channel_buffer"
+	KeySendConnBuffer              = "send.conn_buffer"
+	KeySendEnqueueTimeoutMS        = "send.enqueue_timeout_ms"
+	KeyRoutingForwardRemote        = "routing.forward_remote"
+	KeyProcQueueStrategy           = "process.queue_strategy" // conn|subproto|source_target|roundrobin
+	KeyDefaultForwardEnable        = "routing.default_forward_enable"
+	KeyDefaultForwardTarget        = "routing.default_forward_target"
+	KeyDefaultForwardMap           = "routing.default_forward_map"
+	KeyParentEnable                = "parent.enable"
+	KeyParentAddr                  = "parent.addr"
+	KeyParentJoinPermit            = "parent.join_permit"
+	KeyParentReconnectSec          = "parent.reconnect_sec"
+	KeyAuthNodePrivKey             = "auth.node_privkey" // base64 DER p256 private key
+	KeyAuthNodePubKey              = "auth.node_pubkey"  // base64 DER p256 public key
+	KeyAuthTrustedNodes            = "auth.trusted_nodes"
 )
 
 // NewMap builds a MapConfig from the provided data and fills defaults for missing keys.
@@ -52,6 +56,9 @@ func NewMap(data map[string]string) *MapConfig {
 	ensureDefault(mc.data, KeyAuthDefaultPerms, "")
 	ensureDefault(mc.data, KeyAuthNodeRoles, "")
 	ensureDefault(mc.data, KeyAuthRolePerms, "")
+	ensureDefault(mc.data, KeyAuthRegisterRequireApproval, "false")
+	ensureDefault(mc.data, KeyAuthRegisterPendingTTLSec, "86400")
+	ensureDefault(mc.data, KeyAuthRegisterPermitTTLSec, "3600")
 	ensureDefault(mc.data, KeySendChannelCount, "1")
 	ensureDefault(mc.data, KeySendWorkersPerChan, "1")
 	ensureDefault(mc.data, KeySendChannelBuffer, "64")
@@ -64,6 +71,7 @@ func NewMap(data map[string]string) *MapConfig {
 	ensureDefault(mc.data, KeyDefaultForwardMap, "")
 	ensureDefault(mc.data, KeyParentEnable, "false")
 	ensureDefault(mc.data, KeyParentAddr, "")
+	ensureDefault(mc.data, KeyParentJoinPermit, "")
 	ensureDefault(mc.data, KeyParentReconnectSec, "3")
 	return mc
 }
