@@ -48,6 +48,11 @@ const (
 	KeyAuthTrustedNodes                   = "auth.trusted_nodes"
 )
 
+const (
+	DefaultAuthRolePerms                  = "superadmin:*;admin:file.read,file.write,flow.set,flow.delete,exec.call,exec.cap.query,exec.cap.sync,var.private_set,var.revoke,var.subscribe,auth.revoke,auth.pending.list,auth.register.approve,auth.register.reject,auth.permit.issue,auth.permit.revoke;node:file.read,file.write,flow.set,exec.call,exec.cap.query,exec.cap.sync"
+	DefaultAuthBootstrapFirstRegisterRole = "superadmin"
+)
+
 // NewMap builds a MapConfig from the provided data and fills defaults for missing keys.
 func NewMap(data map[string]string) *MapConfig {
 	mc := &MapConfig{data: make(map[string]string)}
@@ -60,12 +65,12 @@ func NewMap(data map[string]string) *MapConfig {
 	ensureDefault(mc.data, KeyAuthDefaultRole, "node")
 	ensureDefault(mc.data, KeyAuthDefaultPerms, "")
 	ensureDefault(mc.data, KeyAuthNodeRoles, "")
-	ensureDefault(mc.data, KeyAuthRolePerms, "")
+	ensureDefault(mc.data, KeyAuthRolePerms, DefaultAuthRolePerms)
 	ensureDefault(mc.data, KeyAuthRegisterRequireApproval, "false")
 	ensureDefault(mc.data, KeyAuthRegisterPendingTTLSec, "86400")
 	ensureDefault(mc.data, KeyAuthRegisterPermitTTLSec, "3600")
 	ensureDefault(mc.data, KeyAuthBootstrapFirstRegisterEnable, "false")
-	ensureDefault(mc.data, KeyAuthBootstrapFirstRegisterRole, "admin")
+	ensureDefault(mc.data, KeyAuthBootstrapFirstRegisterRole, DefaultAuthBootstrapFirstRegisterRole)
 	ensureDefault(mc.data, KeyAuthBootstrapFirstRegisterDeviceID, "")
 	ensureDefault(mc.data, KeyAuthBootstrapFirstRegisterPubKey, "")
 	ensureDefault(mc.data, KeyAuthBootstrapFirstRegisterEpoch, "0")
