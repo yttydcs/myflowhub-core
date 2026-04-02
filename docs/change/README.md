@@ -23,6 +23,7 @@
 ## Current Entries
 
 - [2026-04-04_bootstrap-selfregister-endpoint-dialer.md](2026-04-04_bootstrap-selfregister-endpoint-dialer.md)
+- [2026-04-02_core-flow-permission-defaults.md](2026-04-02_core-flow-permission-defaults.md)
 - [2026-03-16_quic-transport-core.md](2026-03-16_quic-transport-core.md)
 - [2026-03-15_windows-rfcomm-stream-fix.md](2026-03-15_windows-rfcomm-stream-fix.md)
 - [2026-03-15_windows-rfcomm-send-timeout-and-chunking.md](2026-03-15_windows-rfcomm-send-timeout-and-chunking.md)
