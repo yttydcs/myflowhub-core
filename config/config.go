@@ -49,7 +49,7 @@ const (
 )
 
 const (
-	DefaultAuthRolePerms                  = "superadmin:*;admin:file.read,file.write,flow.set,flow.delete,exec.call,exec.cap.query,exec.cap.sync,var.private_set,var.revoke,var.subscribe,auth.revoke,auth.pending.list,auth.register.approve,auth.register.reject,auth.permit.issue,auth.permit.revoke;node:file.read,file.write,flow.set,exec.call,exec.cap.query,exec.cap.sync"
+	DefaultAuthRolePerms                  = "superadmin:*;admin:file.read,file.write,flow.set,flow.delete,flow.run,flow.read,exec.call,exec.cap.query,exec.cap.sync,var.private_set,var.revoke,var.subscribe,auth.revoke,auth.pending.list,auth.register.approve,auth.register.reject,auth.permit.issue,auth.permit.revoke;node:file.read,file.write,flow.set,flow.run,flow.read,exec.call,exec.cap.query,exec.cap.sync"
 	DefaultAuthBootstrapFirstRegisterRole = "superadmin"
 )
 
