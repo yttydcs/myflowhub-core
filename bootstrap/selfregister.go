@@ -12,11 +12,13 @@ import (
 
 	core "github.com/yttydcs/myflowhub-core"
 	"github.com/yttydcs/myflowhub-core/header"
+	"github.com/yttydcs/myflowhub-core/listener/tcp_listener"
 )
 
 // SelfRegisterOptions 配置自注册行为。
 type SelfRegisterOptions struct {
 	ParentAddr  string
+	Dial        func(context.Context) (core.IConnection, error)
 	SelfID      string
 	JoinPermit  string
 	Timeout     time.Duration
@@ -58,7 +60,10 @@ func (e *RegisterStatusError) Error() string {
 // SelfRegister 通过 SubProto=2 的 register/login 获取 node_id（旧版会返回 credential，现已不要求）。
 // 适用于有父节点且未预设 node_id 的 Hub/节点。
 func SelfRegister(ctx context.Context, opts SelfRegisterOptions) (uint32, string, error) {
-	if opts.ParentAddr == "" {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if opts.Dial == nil && opts.ParentAddr == "" {
 		return 0, "", errors.New("parent address required")
 	}
 	if opts.SelfID == "" {
@@ -74,15 +79,13 @@ func SelfRegister(ctx context.Context, opts SelfRegisterOptions) (uint32, string
 		opts.Logger = slog.Default()
 	}
 
-	dialer := net.Dialer{Timeout: opts.DialTimeout}
 	cctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
-	conn, err := dialer.DialContext(cctx, "tcp", opts.ParentAddr)
+	conn, err := dialSelfRegisterConn(cctx, opts)
 	if err != nil {
 		return 0, "", err
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(opts.Timeout))
 
 	codec := header.HeaderTcpCodec{}
 	msgID := uint32(1)
@@ -102,10 +105,10 @@ func SelfRegister(ctx context.Context, opts SelfRegisterOptions) (uint32, string
 		WithSourceID(0).
 		WithTargetID(0).
 		WithMsgID(msgID)
-	if err := sendFrame(conn, codec, regHdr, regPayload); err != nil {
+	if err := sendFrame(cctx, conn, codec, regHdr, regPayload); err != nil {
 		return 0, "", err
 	}
-	rHdr, rBody, err := codec.Decode(conn)
+	rHdr, rBody, err := recvFrame(cctx, conn, codec)
 	if err != nil {
 		return 0, "", err
 	}
@@ -129,10 +132,10 @@ func SelfRegister(ctx context.Context, opts SelfRegisterOptions) (uint32, string
 			WithSourceID(nodeID).
 			WithTargetID(0).
 			WithMsgID(msgID)
-		if err := sendFrame(conn, codec, loginHdr, loginPayload); err != nil {
+		if err := sendFrame(cctx, conn, codec, loginHdr, loginPayload); err != nil {
 			return 0, "", err
 		}
-		_, loginResp, err := codec.Decode(conn)
+		_, loginResp, err := recvFrame(cctx, conn, codec)
 		if err != nil {
 			return 0, "", err
 		}
@@ -144,13 +147,68 @@ func SelfRegister(ctx context.Context, opts SelfRegisterOptions) (uint32, string
 	return nodeID, cred, nil
 }
 
-func sendFrame(conn net.Conn, codec header.HeaderTcpCodec, hdr core.IHeader, payload []byte) error {
-	frame, err := codec.Encode(hdr, payload)
-	if err != nil {
-		return err
+func dialSelfRegisterConn(ctx context.Context, opts SelfRegisterOptions) (core.IConnection, error) {
+	if opts.Dial != nil {
+		conn, err := opts.Dial(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if conn == nil {
+			return nil, errors.New("self register dial returned nil connection")
+		}
+		return conn, nil
 	}
-	_, err = conn.Write(frame)
-	return err
+
+	dialer := net.Dialer{Timeout: opts.DialTimeout}
+	raw, err := dialer.DialContext(ctx, "tcp", opts.ParentAddr)
+	if err != nil {
+		return nil, err
+	}
+	_ = raw.SetDeadline(time.Now().Add(opts.Timeout))
+	return tcp_listener.NewTCPConnection(raw), nil
+}
+
+func sendFrame(ctx context.Context, conn core.IConnection, codec header.HeaderTcpCodec, hdr core.IHeader, payload []byte) error {
+	return runConnOp(ctx, conn, func() error {
+		return conn.SendWithHeader(hdr, payload, codec)
+	})
+}
+
+func recvFrame(ctx context.Context, conn core.IConnection, codec header.HeaderTcpCodec) (core.IHeader, []byte, error) {
+	type decodeResult struct {
+		hdr  core.IHeader
+		body []byte
+		err  error
+	}
+
+	done := make(chan decodeResult, 1)
+	go func() {
+		hdr, body, err := codec.Decode(conn.Pipe())
+		done <- decodeResult{hdr: hdr, body: body, err: err}
+	}()
+
+	select {
+	case result := <-done:
+		return result.hdr, result.body, result.err
+	case <-ctx.Done():
+		_ = conn.Close()
+		return nil, nil, ctx.Err()
+	}
+}
+
+func runConnOp(ctx context.Context, conn core.IConnection, op func() error) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- op()
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		_ = conn.Close()
+		return ctx.Err()
+	}
 }
 
 func parseRegisterResp(_ core.IHeader, body []byte) (uint32, string, error) {
