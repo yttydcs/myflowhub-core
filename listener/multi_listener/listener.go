@@ -1,5 +1,7 @@
 package multi_listener
 
+// Context: This file provides shared Core framework logic around listener.
+
 import (
 	"context"
 	"errors"

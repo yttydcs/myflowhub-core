@@ -1,5 +1,7 @@
 package server
 
+// Context: This file provides shared Core framework logic around server.
+
 import (
 	"context"
 	"crypto/rand"

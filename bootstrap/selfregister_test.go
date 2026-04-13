@@ -1,5 +1,7 @@
 package bootstrap
 
+// Context: This file provides shared Core framework logic around selfregister_test.
+
 import (
 	"context"
 	"encoding/json"

@@ -1,5 +1,7 @@
 package process
 
+// Context: This file provides shared Core framework logic around prerouting.
+
 import (
 	"context"
 	"log/slog"

@@ -1,5 +1,7 @@
 package rfcomm_listener
 
+// Context: This file provides shared Core framework logic around listener.
+
 import (
 	"context"
 	"errors"
@@ -13,9 +15,9 @@ import (
 )
 
 type Options struct {
-	UUID    string
-	Channel int
-	Adapter string
+	UUID     string
+	Channel  int
+	Adapter  string
 	Insecure bool
 
 	Logger *slog.Logger

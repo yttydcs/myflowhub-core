@@ -1,5 +1,7 @@
 package core
 
+// Context: This file provides shared Core framework logic around writeutil.
+
 import (
 	"errors"
 	"io"

@@ -1,5 +1,7 @@
 package quic_listener
 
+// Context: This file provides shared Core framework logic around endpoint.
+
 import (
 	"encoding/hex"
 	"errors"

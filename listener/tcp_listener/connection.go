@@ -1,5 +1,7 @@
 package tcp_listener
 
+// Context: This file provides shared Core framework logic around connection.
+
 import (
 	"fmt"
 	"io"

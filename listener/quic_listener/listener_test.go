@@ -1,5 +1,7 @@
 package quic_listener
 
+// Context: This file provides shared Core framework logic around listener_test.
+
 import (
 	"bufio"
 	"context"

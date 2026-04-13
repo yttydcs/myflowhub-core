@@ -1,5 +1,7 @@
 package reader
 
+// Context: This file provides shared Core framework logic around stream_frame_reader.
+
 import (
 	"io"
 

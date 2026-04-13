@@ -1,5 +1,7 @@
 package core
 
+// Context: This file provides shared Core framework logic around util.
+
 import "strings"
 
 // ParseBool parses common truthy/falsey strings. If unknown, returns def.

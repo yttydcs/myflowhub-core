@@ -1,5 +1,7 @@
 package builder
 
+// Context: This file provides shared Core framework logic around yaml.
+
 import (
 	"errors"
 	"os"

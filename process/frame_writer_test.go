@@ -1,5 +1,7 @@
 package process
 
+// Context: This file provides shared Core framework logic around frame_writer_test.
+
 import (
 	"bytes"
 	"io"

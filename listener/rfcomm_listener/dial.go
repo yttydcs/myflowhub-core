@@ -1,5 +1,7 @@
 package rfcomm_listener
 
+// Context: This file provides shared Core framework logic around dial.
+
 import (
 	"context"
 	"errors"
@@ -9,10 +11,10 @@ import (
 )
 
 type DialOptions struct {
-	BDAddr  string
-	UUID    string
-	Channel int
-	Adapter string
+	BDAddr   string
+	UUID     string
+	Channel  int
+	Adapter  string
 	Insecure bool
 }
 
@@ -51,10 +53,10 @@ func DialEndpoint(ctx context.Context, endpoint string) (core.IConnection, error
 		return nil, err
 	}
 	return Dial(ctx, DialOptions{
-		BDAddr:  ep.BDAddr,
-		UUID:    ep.UUID,
-		Channel: ep.Channel,
-		Adapter: ep.Adapter,
+		BDAddr:   ep.BDAddr,
+		UUID:     ep.UUID,
+		Channel:  ep.Channel,
+		Adapter:  ep.Adapter,
 		Insecure: ep.Insecure,
 	})
 }

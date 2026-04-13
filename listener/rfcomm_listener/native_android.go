@@ -2,6 +2,8 @@
 
 package rfcomm_listener
 
+// Context: This file provides shared Core framework logic around native_android.
+
 import (
 	"context"
 	"errors"

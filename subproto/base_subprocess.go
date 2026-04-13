@@ -1,5 +1,7 @@
 package subproto
 
+// Context: This file provides shared Core framework logic around base_subprocess.
+
 import (
 	"context"
 	"strings"

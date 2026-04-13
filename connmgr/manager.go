@@ -1,5 +1,7 @@
 package connmgr
 
+// Context: This file provides shared Core framework logic around manager.
+
 import (
 	"errors"
 	"sync"

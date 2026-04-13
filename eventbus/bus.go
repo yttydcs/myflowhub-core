@@ -1,5 +1,7 @@
 package eventbus
 
+// Context: This file provides shared Core framework logic around bus.
+
 import (
 	"context"
 	"fmt"

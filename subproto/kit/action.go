@@ -1,5 +1,7 @@
 package kit
 
+// Context: This file provides shared Core framework logic around action.
+
 import (
 	"context"
 	"encoding/json"
@@ -123,4 +125,3 @@ func NewAction(name string, handler ActionHandler, opts ...ActionOption) core.Su
 	}
 	return act
 }
-

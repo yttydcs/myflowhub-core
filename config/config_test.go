@@ -1,5 +1,7 @@
 package config
 
+// Context: This file provides shared Core framework logic around config_test.
+
 import (
 	"strings"
 	"testing"

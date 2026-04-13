@@ -1,5 +1,7 @@
 package header
 
+// Context: This file provides shared Core framework logic around header_test.
+
 import (
 	"bytes"
 	"errors"

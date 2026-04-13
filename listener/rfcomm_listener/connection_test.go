@@ -1,5 +1,7 @@
 package rfcomm_listener
 
+// Context: This file provides shared Core framework logic around connection_test.
+
 import (
 	"bytes"
 	"io"

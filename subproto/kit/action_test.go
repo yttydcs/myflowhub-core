@@ -1,5 +1,7 @@
 package kit
 
+// Context: This file provides shared Core framework logic around action_test.
+
 import "testing"
 
 func TestKindFromName(t *testing.T) {
@@ -21,4 +23,3 @@ func TestKindFromName(t *testing.T) {
 		}
 	}
 }
-

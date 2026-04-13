@@ -1,5 +1,7 @@
 package rfcomm_listener
 
+// Context: This file provides shared Core framework logic around addr.
+
 import (
 	"fmt"
 	"net"
@@ -38,4 +40,3 @@ func (a Addr) String() string {
 }
 
 var _ net.Addr = (*Addr)(nil)
-

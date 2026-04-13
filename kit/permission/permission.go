@@ -1,5 +1,7 @@
 package permission
 
+// Context: This file provides shared Core framework logic around permission.
+
 import (
 	"reflect"
 	"strconv"

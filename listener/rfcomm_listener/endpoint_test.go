@@ -1,5 +1,7 @@
 package rfcomm_listener
 
+// Context: This file provides shared Core framework logic around endpoint_test.
+
 import "testing"
 
 func TestParseEndpoint(t *testing.T) {

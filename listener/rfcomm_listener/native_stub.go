@@ -2,6 +2,8 @@
 
 package rfcomm_listener
 
+// Context: This file provides shared Core framework logic around native_stub.
+
 import (
 	"context"
 	"errors"
@@ -17,4 +19,3 @@ func dialNative(ctx context.Context, opts DialOptions) (core.IPipe, net.Addr, ne
 func listenNative(opts Options) (nativeListener, error) {
 	return nil, errors.New("rfcomm not supported on this OS")
 }
-

@@ -1,5 +1,7 @@
 package kit
 
+// Context: This file provides shared Core framework logic around kit.
+
 import (
 	"context"
 	"log/slog"
@@ -43,4 +45,3 @@ func SendResponse(ctx context.Context, log *slog.Logger, conn core.IConnection, 
 		}
 	}
 }
-

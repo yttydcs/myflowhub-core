@@ -1,5 +1,7 @@
 package core
 
+// Context: This file provides shared Core framework logic around link.
+
 import "net"
 
 // ILink is the minimal transport-facing link abstraction.

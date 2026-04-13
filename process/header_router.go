@@ -1,5 +1,7 @@
 package process
 
+// Context: This file provides shared Core framework logic around header_router.
+
 import (
 	core "github.com/yttydcs/myflowhub-core"
 	"github.com/yttydcs/myflowhub-core/header"
