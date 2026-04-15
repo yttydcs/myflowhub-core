@@ -1,6 +1,6 @@
 package header
 
-// Context: This file provides shared Core framework logic around header.
+// 本文件承载 Core 框架中与 `header` 相关的通用逻辑。
 
 import (
 	"encoding/binary"

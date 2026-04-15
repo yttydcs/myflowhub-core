@@ -1,6 +1,6 @@
 package rfcomm_listener
 
-// Context: This file provides shared Core framework logic around hex.
+// 本文件承载 Core 框架中与 `hex` 相关的通用逻辑。
 
 import "fmt"
 

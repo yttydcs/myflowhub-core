@@ -1,6 +1,6 @@
 package kit
 
-// Context: This file provides shared Core framework logic around action_test.
+// 本文件覆盖 Core 框架中与 `action` 相关的行为。
 
 import "testing"
 

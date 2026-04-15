@@ -1,6 +1,6 @@
 package core
 
-// Context: This file provides shared Core framework logic around roles.
+// 本文件承载 Core 框架中与 `roles` 相关的通用逻辑。
 
 // Metadata keys and values for connection roles.
 const (

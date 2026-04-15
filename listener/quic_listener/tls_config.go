@@ -1,6 +1,6 @@
 package quic_listener
 
-// Context: This file provides shared Core framework logic around tls_config.
+// 本文件承载 Core 框架中与 `tls_config` 相关的通用逻辑。
 
 import (
 	"bytes"
@@ -14,6 +14,7 @@ import (
 	"strings"
 )
 
+// buildServerTLSConfig 组装 QUIC 服务端 TLS 1.3 配置，并按需开启客户端证书校验。
 func buildServerTLSConfig(opts Options) (*tls.Config, error) {
 	certFile := strings.TrimSpace(opts.CertFile)
 	keyFile := strings.TrimSpace(opts.KeyFile)
@@ -47,6 +48,7 @@ func buildServerTLSConfig(opts Options) (*tls.Config, error) {
 	return cfg, nil
 }
 
+// buildClientTLSConfig 组装 QUIC 客户端 TLS 配置，并可选启用 pin / mTLS。
 func buildClientTLSConfig(opts DialOptions) (*tls.Config, error) {
 	cfg := &tls.Config{
 		MinVersion:         tls.VersionTLS13,
@@ -96,6 +98,7 @@ func buildClientTLSConfig(opts DialOptions) (*tls.Config, error) {
 	return cfg, nil
 }
 
+// loadCertPool 按需加载系统根证书与额外 PEM 文件，供 server/client 复用。
 func loadCertPool(file string, useSystem bool) (*x509.CertPool, error) {
 	var pool *x509.CertPool
 	if useSystem {
@@ -124,6 +127,7 @@ func loadCertPool(file string, useSystem bool) (*x509.CertPool, error) {
 	return pool, nil
 }
 
+// normalizePinSHA256 归一化十六进制 pin 文本，便于直接参与证书摘要比对。
 func normalizePinSHA256(raw string) ([]byte, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

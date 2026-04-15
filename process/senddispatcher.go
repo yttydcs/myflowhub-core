@@ -1,6 +1,6 @@
 package process
 
-// Context: This file provides shared Core framework logic around senddispatcher.
+// 本文件承载 Core 框架中与 `senddispatcher` 相关的通用逻辑。
 
 import (
 	"context"
@@ -25,15 +25,15 @@ var (
 	errDispatcherClosed = errors.New("dispatcher closed")
 )
 
-// SendOptions configures the send dispatcher.
+// SendOptions 定义发送调度器的并发与排队参数。
 type SendOptions struct {
 	Logger         *slog.Logger
 	ChannelCount   int
 	WorkersPerChan int
 	ChannelBuffer  int
-	ConnBuffer     int           // per-connection send queue length
-	EnqueueTimeout time.Duration // enqueue timeout for both shard and per-conn queues
-	EncodeInWriter bool          // encode in per-connection writer goroutine (strategy B)
+	ConnBuffer     int           // 单连接发送队列长度。
+	EnqueueTimeout time.Duration // 分片队列与单连接队列共用的入队超时。
+	EncodeInWriter bool          // 是否在单连接 writer goroutine 内完成编码。
 }
 
 type sendTask struct {
@@ -58,6 +58,7 @@ type connWriter struct {
 	wg        sync.WaitGroup
 }
 
+// start 启动单连接 writer 的后台循环，持续串行消费该连接上的发送任务。
 func (w *connWriter) start() {
 	w.wg.Add(1)
 	go func() {
@@ -71,6 +72,7 @@ func (w *connWriter) start() {
 	}()
 }
 
+// write 在单连接串行 writer 中真正落盘，确保同一连接上的帧不会并发交错。
 func (w *connWriter) write(task sendTask) error {
 	if task.codec == nil {
 		return errNilCodec
@@ -83,10 +85,11 @@ func (w *connWriter) write(task sendTask) error {
 	if w.encodeInWriter {
 		return WriteFrame(pipe, task.codec, core.Frame{Header: task.hdr, Payload: task.payload})
 	}
-	// payload assumed encoded already
+	// 非编码模式下认为 payload 已经是最终线上的字节序列。
 	return core.WriteAll(pipe, task.payload)
 }
 
+// enqueue 把发送任务放进该连接私有队列，并在关闭或超时时尽快失败返回。
 func (w *connWriter) enqueue(task sendTask) (err error) {
 	w.mu.RLock()
 	closed := w.closed
@@ -116,6 +119,7 @@ func (w *connWriter) enqueue(task sendTask) (err error) {
 	}
 }
 
+// stop 幂等关闭单连接 writer，并等待已经入队的任务消费完成。
 func (w *connWriter) stop() {
 	w.closeOnce.Do(func() {
 		w.mu.Lock()
@@ -126,7 +130,7 @@ func (w *connWriter) stop() {
 	w.wg.Wait()
 }
 
-// SendDispatcher fan-outs send requests to per-connection serial writers.
+// SendDispatcher 把全局发送请求分流到“按连接串行”的 writer，兼顾并发与单连接有序。
 type SendDispatcher struct {
 	log            *slog.Logger
 	shards         []chan sendTask
@@ -146,6 +150,7 @@ type SendDispatcher struct {
 	writers map[string]*connWriter
 }
 
+// NewSendDispatcher 根据发送并发参数构建调度器，并补齐最小安全默认值。
 func NewSendDispatcher(opts SendOptions) (*SendDispatcher, error) {
 	if opts.ChannelCount <= 0 {
 		opts.ChannelCount = 1
@@ -184,7 +189,7 @@ func NewSendDispatcher(opts SendOptions) (*SendDispatcher, error) {
 	}, nil
 }
 
-// NewSendDispatcherFromConfig builds a dispatcher from config values.
+// NewSendDispatcherFromConfig 从配置读取发送并发参数，供 Server 统一装配。
 func NewSendDispatcherFromConfig(cfg core.IConfig, logger *slog.Logger) (*SendDispatcher, error) {
 	opts := SendOptions{
 		Logger:         logger,
@@ -198,6 +203,7 @@ func NewSendDispatcherFromConfig(cfg core.IConfig, logger *slog.Logger) (*SendDi
 	return NewSendDispatcher(opts)
 }
 
+// ensureStarted 延迟启动分片 worker 和清理协程，避免未使用时提前占用 goroutine。
 func (d *SendDispatcher) ensureStarted(ctx context.Context) {
 	d.startOnce.Do(func() {
 		if ctx == nil {
@@ -243,7 +249,7 @@ func (d *SendDispatcher) ensureStarted(ctx context.Context) {
 	})
 }
 
-// Dispatch queues a send task.
+// Dispatch 把发送任务投递到分片队列，再由分片 worker 转交给具体连接 writer。
 func (d *SendDispatcher) Dispatch(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte, codec core.IHeaderCodec, cb func(error)) error {
 	if conn == nil {
 		return errNilConn
@@ -275,6 +281,7 @@ func (d *SendDispatcher) Dispatch(ctx context.Context, conn core.IConnection, hd
 	}
 }
 
+// selectQueue 用连接 ID 做稳定分片，尽量让同一连接的 writer 查找命中同一 shard。
 func (d *SendDispatcher) selectQueue(conn core.IConnection, hdr core.IHeader) int {
 	if d.shardCount == 1 {
 		return 0
@@ -290,6 +297,7 @@ func (d *SendDispatcher) selectQueue(conn core.IConnection, hdr core.IHeader) in
 	return 0
 }
 
+// getOrCreateWriter 惰性创建连接专属 writer，避免为短生命周期连接预先分配资源。
 func (d *SendDispatcher) getOrCreateWriter(conn core.IConnection) *connWriter {
 	id := conn.ID()
 	d.mu.RLock()
@@ -316,7 +324,7 @@ func (d *SendDispatcher) getOrCreateWriter(conn core.IConnection) *connWriter {
 	return w
 }
 
-// CloseConn stops and removes the writer for a connection.
+// CloseConn 在连接移除时同步清理其 writer，避免遗留队列继续写向失效 pipe。
 func (d *SendDispatcher) CloseConn(connID string) {
 	d.mu.Lock()
 	w, ok := d.writers[connID]
@@ -329,7 +337,7 @@ func (d *SendDispatcher) CloseConn(connID string) {
 	}
 }
 
-// Shutdown stops the dispatcher and waits for workers to exit.
+// Shutdown 关闭全部分片和连接 writer，并等待后台 goroutine 退出。
 func (d *SendDispatcher) Shutdown() {
 	d.shutdownOnce.Do(func() {
 		if d.cancel != nil {
@@ -339,6 +347,7 @@ func (d *SendDispatcher) Shutdown() {
 	})
 }
 
+// Snapshot 返回当前调度器的并发配置，便于测试和运行时观测。
 func (d *SendDispatcher) Snapshot() (channels, workers, buffer int) {
 	channels = len(d.shards)
 	workers = d.workersPerChan
@@ -348,11 +357,13 @@ func (d *SendDispatcher) Snapshot() (channels, workers, buffer int) {
 	return
 }
 
+// String 输出调度器关键参数，便于日志或调试时快速识别配置。
 func (d *SendDispatcher) String() string {
 	ch, w, b := d.Snapshot()
 	return fmt.Sprintf("SendDispatcher{channels=%d workers=%d buffer=%d connBuffer=%d enqueueTimeout=%s}", ch, w, b, d.connBuffer, d.enqueueTimeout)
 }
 
+// readDurationMs 把毫秒配置解析为 time.Duration，非法值统一退回默认值。
 func readDurationMs(cfg core.IConfig, key string, def int) time.Duration {
 	if cfg == nil {
 		return time.Duration(def) * time.Millisecond

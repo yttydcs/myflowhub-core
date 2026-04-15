@@ -1,6 +1,6 @@
 package bootstrap
 
-// Context: This file provides shared Core framework logic around selfregister.
+// 本文件承载 Core 框架中与 `selfregister` 相关的通用逻辑。
 
 import (
 	"context"
@@ -38,6 +38,7 @@ type RegisterStatusError struct {
 	Msg       string
 }
 
+// Error 将 register 返回的状态细化成便于日志和上层 UI 理解的错误文本。
 func (e *RegisterStatusError) Error() string {
 	if e == nil {
 		return "register failed"
@@ -149,6 +150,7 @@ func SelfRegister(ctx context.Context, opts SelfRegisterOptions) (uint32, string
 	return nodeID, cred, nil
 }
 
+// dialSelfRegisterConn 优先复用调用方注入的 dialer，否则退回旧版 TCP 直连。
 func dialSelfRegisterConn(ctx context.Context, opts SelfRegisterOptions) (core.IConnection, error) {
 	if opts.Dial != nil {
 		conn, err := opts.Dial(ctx)
@@ -170,12 +172,14 @@ func dialSelfRegisterConn(ctx context.Context, opts SelfRegisterOptions) (core.I
 	return tcp_listener.NewTCPConnection(raw), nil
 }
 
+// sendFrame 在 context 保护下发送一帧 bootstrap 请求。
 func sendFrame(ctx context.Context, conn core.IConnection, codec header.HeaderTcpCodec, hdr core.IHeader, payload []byte) error {
 	return runConnOp(ctx, conn, func() error {
 		return conn.SendWithHeader(hdr, payload, codec)
 	})
 }
 
+// recvFrame 同步读取一帧响应，并在超时时主动关闭连接打断阻塞读取。
 func recvFrame(ctx context.Context, conn core.IConnection, codec header.HeaderTcpCodec) (core.IHeader, []byte, error) {
 	type decodeResult struct {
 		hdr  core.IHeader
@@ -198,6 +202,7 @@ func recvFrame(ctx context.Context, conn core.IConnection, codec header.HeaderTc
 	}
 }
 
+// runConnOp 为单次连接操作补上超时感知，避免 bootstrap 卡在底层 I/O。
 func runConnOp(ctx context.Context, conn core.IConnection, op func() error) error {
 	done := make(chan error, 1)
 	go func() {
@@ -213,6 +218,7 @@ func runConnOp(ctx context.Context, conn core.IConnection, op func() error) erro
 	}
 }
 
+// parseRegisterResp 兼容旧新两种 register 响应形态，并把 pending/rejected 提升为显式错误。
 func parseRegisterResp(_ core.IHeader, body []byte) (uint32, string, error) {
 	var msg struct {
 		Action string          `json:"action"`
@@ -271,6 +277,7 @@ func parseRegisterResp(_ core.IHeader, body []byte) (uint32, string, error) {
 	}
 }
 
+// assertLoginOK 只校验 bootstrap 登录占位请求是否拿到成功 code。
 func assertLoginOK(body []byte) error {
 	var msg struct {
 		Action string          `json:"action"`
@@ -292,6 +299,7 @@ func assertLoginOK(body []byte) error {
 	return nil
 }
 
+// coalesceRegisterReason 选取第一条非空原因文本，减少错误分支里的重复判断。
 func coalesceRegisterReason(values ...string) string {
 	for _, value := range values {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {

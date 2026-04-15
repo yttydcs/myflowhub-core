@@ -1,6 +1,6 @@
 package rfcomm_listener
 
-// Context: This file provides shared Core framework logic around listener.
+// 本文件承载 Core 框架中与 `listener` 相关的通用逻辑。
 
 import (
 	"context"
@@ -23,6 +23,7 @@ type Options struct {
 	Logger *slog.Logger
 }
 
+// setDefaults 为 RFCOMM listener 补齐默认 UUID、adapter 与日志器。
 func (o *Options) setDefaults() {
 	if strings.TrimSpace(o.UUID) == "" {
 		o.UUID = DefaultRFCOMMUUID
@@ -35,6 +36,7 @@ func (o *Options) setDefaults() {
 	}
 }
 
+// Validate 校验监听侧参数，避免把非法 UUID/channel 传给原生栈。
 func (o Options) Validate() error {
 	if strings.TrimSpace(o.UUID) == "" || !isUUIDLike(o.UUID) {
 		return ErrEndpointUUIDInvalid
@@ -54,7 +56,7 @@ type nativeListener interface {
 	Addr() net.Addr
 }
 
-// RFCOMMListener implements core.IListener for Bluetooth Classic RFCOMM (byte stream).
+// RFCOMMListener 实现 Bluetooth Classic RFCOMM 的 `core.IListener`。
 type RFCOMMListener struct {
 	opts Options
 	nl   nativeListener
@@ -62,6 +64,7 @@ type RFCOMMListener struct {
 	closed atomic.Bool
 }
 
+// New 构造 RFCOMM listener，并先归一化默认参数。
 func New(opts Options) *RFCOMMListener {
 	opts.setDefaults()
 	opts.UUID = strings.ToLower(strings.TrimSpace(opts.UUID))
@@ -79,6 +82,7 @@ func (l *RFCOMMListener) Addr() net.Addr {
 	return nil
 }
 
+// Listen 启动平台原生 RFCOMM 监听，并把新连接接入连接管理器。
 func (l *RFCOMMListener) Listen(ctx context.Context, cm core.IConnectionManager) error {
 	if l.closed.Load() {
 		return errors.New("rfcomm listener already closed")
@@ -155,6 +159,7 @@ func (l *RFCOMMListener) Listen(ctx context.Context, cm core.IConnectionManager)
 	}
 }
 
+// Close 关闭底层原生 listener，让 Accept 循环尽快退出。
 func (l *RFCOMMListener) Close() error {
 	l.closed.Store(true)
 	if l.nl != nil {

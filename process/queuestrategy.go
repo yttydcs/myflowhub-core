@@ -1,6 +1,6 @@
 package process
 
-// Context: This file provides shared Core framework logic around queuestrategy.
+// 本文件承载 Core 框架中与 `queuestrategy` 相关的通用逻辑。
 
 import (
 	"hash/fnv"
@@ -21,7 +21,10 @@ type QueueSelectStrategy interface {
 // ConnHashStrategy 根据连接 ID 做 FNV32 哈希；若无连接退化到子协议。保证同连接顺序性。
 type ConnHashStrategy struct{}
 
+// Name 返回配置字符串，供配置解析与观测输出复用。
 func (ConnHashStrategy) Name() string { return "conn" }
+
+// SelectQueue 尽量让同一连接固定落到同一队列，避免同连接消息乱序。
 func (ConnHashStrategy) SelectQueue(conn core.IConnection, hdr core.IHeader, n int) int {
 	if n <= 1 {
 		return 0
@@ -40,7 +43,10 @@ func (ConnHashStrategy) SelectQueue(conn core.IConnection, hdr core.IHeader, n i
 // SubProtoStrategy 按子协议号取模，适合高并发多子协议场景。
 type SubProtoStrategy struct{}
 
+// Name 返回该策略在配置中的名字。
 func (SubProtoStrategy) Name() string { return "subproto" }
+
+// SelectQueue 用子协议号分片，适合不同子协议工作负载差异明显的场景。
 func (SubProtoStrategy) SelectQueue(_ core.IConnection, hdr core.IHeader, n int) int {
 	if n <= 1 {
 		return 0
@@ -54,7 +60,10 @@ func (SubProtoStrategy) SelectQueue(_ core.IConnection, hdr core.IHeader, n int)
 // SourceTargetStrategy 按 Source/Target 组合哈希，保持同一对通信顺序。
 type SourceTargetStrategy struct{}
 
+// Name 返回该策略在配置中的名字。
 func (SourceTargetStrategy) Name() string { return "source_target" }
+
+// SelectQueue 用源/目标节点对做哈希，让同一通信双方的帧尽量在同一队列串行处理。
 func (SourceTargetStrategy) SelectQueue(_ core.IConnection, hdr core.IHeader, n int) int {
 	if n <= 1 {
 		return 0
@@ -80,15 +89,14 @@ func (SourceTargetStrategy) SelectQueue(_ core.IConnection, hdr core.IHeader, n 
 // RoundRobinStrategy 简单轮询（不保证顺序性）。
 type RoundRobinStrategy struct{ counter uint64 }
 
+// Name 返回该策略在配置中的名字。
 func (RoundRobinStrategy) Name() string { return "roundrobin" }
 
-// 这里不做原子自增（可后续优化）；当前 dispatcher 事件入队本身可跨 goroutine，需线程安全。
+// SelectQueue 用原子计数轮询分配队列，换取更平均的负载，但不承诺同连接顺序。
 func (r *RoundRobinStrategy) SelectQueue(_ core.IConnection, _ core.IHeader, n int) int {
 	if n <= 1 {
 		return 0
 	}
-	// 使用原子自增
-	// 由于结构体不可变，这里设计为指针使用（dispatcher 设置时用 &RoundRobinStrategy{}）
 	return int(nextCounter(&r.counter) % uint64(n))
 }
 

@@ -1,6 +1,6 @@
 package rfcomm_listener
 
-// Context: This file provides shared Core framework logic around endpoint.
+// 本文件承载 Core 框架中与 `endpoint` 相关的通用逻辑。
 
 import (
 	"errors"
@@ -57,6 +57,7 @@ type Endpoint struct {
 	Name string
 }
 
+// Validate 校验 RFCOMM endpoint 的 BDAddr、UUID、channel 与 adapter 组合是否合法。
 func (e Endpoint) Validate() error {
 	if e.BDAddr == "" {
 		return ErrEndpointAddrMissing
@@ -83,17 +84,7 @@ func (e Endpoint) Validate() error {
 	return nil
 }
 
-// ParseEndpoint parses a RFCOMM endpoint URI.
-//
-// Supported format:
-//   bt+rfcomm://<bdaddr>?uuid=<uuid>&channel=<1-30>&adapter=hci0&secure=true&name=<reserved>
-//
-// Notes:
-// - bdaddr is required for v1 (manual input); future versions may support "name".
-// - uuid defaults to DefaultRFCOMMUUID when missing.
-// - channel defaults to 0 (UUID-first).
-// - adapter defaults to "hci0".
-// - secure defaults to true.
+// ParseEndpoint 解析 RFCOMM endpoint URI，并补齐 UUID/channel/adapter 的默认值。
 func ParseEndpoint(raw string) (Endpoint, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -172,6 +163,7 @@ func ParseEndpoint(raw string) (Endpoint, error) {
 	return ep, ep.Validate()
 }
 
+// parseBool 解析 endpoint query 中的布尔开关。
 func parseBool(raw string) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "1", "true", "t", "yes", "y", "on":
@@ -183,6 +175,7 @@ func parseBool(raw string) (bool, error) {
 	}
 }
 
+// normalizeBDAddr 把多种蓝牙地址输入格式统一成 `AA:BB:CC:DD:EE:FF`。
 func normalizeBDAddr(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -208,6 +201,7 @@ func normalizeBDAddr(raw string) (string, error) {
 	return fmt.Sprintf("%s:%s:%s:%s:%s:%s", s[0:2], s[2:4], s[4:6], s[6:8], s[8:10], s[10:12]), nil
 }
 
+// isUUIDLike 做一层最小 UUID 形态校验，避免把明显错误的值传给平台层。
 func isUUIDLike(s string) bool {
 	// Minimal validation: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 	// We keep it strict to avoid surprising cross-platform behavior.

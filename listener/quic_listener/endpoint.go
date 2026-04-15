@@ -1,6 +1,6 @@
 package quic_listener
 
-// Context: This file provides shared Core framework logic around endpoint.
+// 本文件承载 Core 框架中与 `endpoint` 相关的通用逻辑。
 
 import (
 	"encoding/hex"
@@ -41,6 +41,7 @@ type Endpoint struct {
 	ClientKeyFile  string
 }
 
+// Validate 校验 QUIC endpoint 的地址、ALPN、pin 与 mTLS 参数组合是否合法。
 func (e Endpoint) Validate() error {
 	if err := validateHostPort(e.Addr); err != nil {
 		return err
@@ -61,11 +62,7 @@ func (e Endpoint) Validate() error {
 	return nil
 }
 
-// ParseEndpoint parses a QUIC endpoint URI.
-//
-// Format:
-//
-//	quic://host:port?server_name=example.com&alpn=myflowhub&insecure=false&pin_sha256=<hex>
+// ParseEndpoint 解析 QUIC endpoint URI，并补齐 server_name / alpn 等默认值。
 func ParseEndpoint(raw string) (Endpoint, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -126,6 +123,7 @@ func ParseEndpoint(raw string) (Endpoint, error) {
 	return ep, ep.Validate()
 }
 
+// parseBoolDefault 解析 query bool，并在空值时返回默认配置。
 func parseBoolDefault(raw string, def bool) (bool, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -141,6 +139,7 @@ func parseBoolDefault(raw string, def bool) (bool, error) {
 	}
 }
 
+// validateHostPort 统一校验 host:port 形态，供 dial/listen 两侧复用。
 func validateHostPort(addr string) error {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {

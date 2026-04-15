@@ -1,6 +1,6 @@
 package config
 
-// Context: This file provides shared Core framework logic around config_test.
+// 本文件覆盖 Core 框架中与 `config` 相关的行为。
 
 import (
 	"strings"

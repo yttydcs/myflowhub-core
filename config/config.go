@@ -1,6 +1,6 @@
 package config
 
-// Context: This file provides shared Core framework logic around config.
+// 本文件承载 Core 框架中与 `config` 相关的通用逻辑。
 
 import (
 	"sort"
@@ -93,12 +93,14 @@ func NewMap(data map[string]string) *MapConfig {
 	return mc
 }
 
+// ensureDefault 仅在键缺失时补默认值，避免覆盖显式配置。
 func ensureDefault(m map[string]string, key, val string) {
 	if _, ok := m[key]; !ok {
 		m[key] = val
 	}
 }
 
+// MergeFile 把外部加载到的键值覆盖到当前运行时配置上。
 func (m *MapConfig) MergeFile(data map[string]string) {
 	if m == nil || data == nil {
 		return

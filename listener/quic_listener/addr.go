@@ -1,6 +1,6 @@
 package quic_listener
 
-// Context: This file provides shared Core framework logic around addr.
+// 本文件承载 Core 框架中与 `addr` 相关的通用逻辑。
 
 import (
 	"fmt"

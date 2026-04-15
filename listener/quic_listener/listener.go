@@ -1,6 +1,6 @@
 package quic_listener
 
-// Context: This file provides shared Core framework logic around listener.
+// 本文件承载 Core 框架中与 `listener` 相关的通用逻辑。
 
 import (
 	"context"
@@ -29,6 +29,7 @@ type Options struct {
 	RequireClientCert bool
 }
 
+// setDefaults 补齐监听侧默认 ALPN 与日志器。
 func (o *Options) setDefaults() {
 	if strings.TrimSpace(o.ALPN) == "" {
 		o.ALPN = DefaultALPN
@@ -38,6 +39,7 @@ func (o *Options) setDefaults() {
 	}
 }
 
+// Validate 校验监听地址与证书配置，避免运行后才暴露 TLS 缺参。
 func (o Options) Validate() error {
 	if err := validateHostPort(strings.TrimSpace(o.Addr)); err != nil {
 		return err
@@ -58,6 +60,7 @@ type QUICListener struct {
 	closed atomic.Bool
 }
 
+// New 构造 QUIC listener，并在进入 Listen 前先归一化默认参数。
 func New(opts Options) *QUICListener {
 	opts.setDefaults()
 	return &QUICListener{opts: opts}
@@ -74,6 +77,7 @@ func (l *QUICListener) Addr() net.Addr {
 	return &Addr{Address: l.ln.Addr().String(), ALPN: l.opts.ALPN, Role: "listen"}
 }
 
+// Listen 启动 QUIC 监听、接受会话/stream，并把每条流包装为 IConnection 交给管理器。
 func (l *QUICListener) Listen(ctx context.Context, cm core.IConnectionManager) error {
 	if l.closed.Load() {
 		return errors.New("quic listener already closed")
@@ -150,6 +154,7 @@ func (l *QUICListener) Listen(ctx context.Context, cm core.IConnectionManager) e
 	}
 }
 
+// Close 关闭底层 QUIC listener，使 Accept 尽快退出。
 func (l *QUICListener) Close() error {
 	l.closed.Store(true)
 	if l.ln != nil {
@@ -158,6 +163,7 @@ func (l *QUICListener) Close() error {
 	return nil
 }
 
+// defaultQUICConfig 给 transport 层设置保守的 keepalive 与 idle timeout。
 func defaultQUICConfig() *quic.Config {
 	return &quic.Config{
 		KeepAlivePeriod: 15 * time.Second,

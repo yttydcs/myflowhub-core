@@ -1,6 +1,6 @@
 package builder
 
-// Context: This file provides shared Core framework logic around yaml.
+// 本文件承载 Core 框架中与 `yaml` 相关的通用逻辑。
 
 import (
 	"errors"
@@ -17,6 +17,7 @@ type YAMLBuilder struct {
 	Path string
 }
 
+// Load 从 YAML 文件读取平铺配置；缺文件时返回空配置而不是报错。
 func (b YAMLBuilder) Load() (core.IConfig, error) {
 	if b.Path == "" {
 		return config.NewMap(nil), nil
@@ -35,6 +36,7 @@ func (b YAMLBuilder) Load() (core.IConfig, error) {
 	return config.NewMap(raw), nil
 }
 
+// Reload 对静态 YAML 构建器来说就是重新读取源文件。
 func (b YAMLBuilder) Reload() (core.IConfig, error) {
 	return b.Load()
 }

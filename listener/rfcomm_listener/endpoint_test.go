@@ -1,6 +1,6 @@
 package rfcomm_listener
 
-// Context: This file provides shared Core framework logic around endpoint_test.
+// 本文件覆盖 Core 框架中与 `endpoint` 相关的行为。
 
 import "testing"
 

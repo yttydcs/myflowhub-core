@@ -1,6 +1,6 @@
 package builder
 
-// Context: This file provides shared Core framework logic around env.
+// 本文件承载 Core 框架中与 `env` 相关的通用逻辑。
 
 import (
 	"os"
@@ -19,6 +19,7 @@ type EnvBuilder struct {
 	Prefix string
 }
 
+// Load 扫描环境变量并按约定规则归一成点分配置键。
 func (b EnvBuilder) Load() (core.IConfig, error) {
 	data := make(map[string]string)
 	prefix := strings.TrimSpace(b.Prefix)
@@ -46,10 +47,12 @@ func (b EnvBuilder) Load() (core.IConfig, error) {
 	return config.NewMap(data), nil
 }
 
+// Reload 对环境变量构建器来说等价于重新执行一次全量读取。
 func (b EnvBuilder) Reload() (core.IConfig, error) {
 	return b.Load()
 }
 
+// normalizeEnvKey 把环境变量名映射为配置系统使用的点分键。
 func normalizeEnvKey(k string) string {
 	k = strings.TrimSpace(k)
 	if k == "" {

@@ -1,6 +1,6 @@
 package kit
 
-// Context: This file provides shared Core framework logic around kit.
+// 本文件承载 Core 框架中与 `kit` 相关的通用逻辑。
 
 import (
 	"context"

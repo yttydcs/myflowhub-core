@@ -1,6 +1,6 @@
 package connmgr
 
-// Context: This file provides shared Core framework logic around manager.
+// 本文件承载 Core 框架中与 `manager` 相关的通用逻辑。
 
 import (
 	"errors"
@@ -31,6 +31,7 @@ type Manager struct {
 	devIndex  map[string]core.IConnection
 }
 
+// New 初始化内存版连接/链路索引表。
 func New() *Manager {
 	return &Manager{
 		conns:     make(map[string]core.IConnection),
@@ -53,6 +54,7 @@ func (m *Manager) SetLinkHooks(h core.LinkHooks) {
 	m.mu.Unlock()
 }
 
+// Add 注册一条新连接，并同步更新 node/device 反向索引与生命周期钩子。
 func (m *Manager) Add(conn core.IConnection) error {
 	if conn == nil {
 		return errors.New("conn nil")
@@ -86,6 +88,7 @@ func (m *Manager) AddLink(link core.ILink) error {
 	return m.Add(conn)
 }
 
+// addNodeIndexLocked 从连接元数据中提取 nodeID，建立快速路由索引。
 func (m *Manager) addNodeIndexLocked(conn core.IConnection) {
 	if conn == nil {
 		return
@@ -97,6 +100,7 @@ func (m *Manager) addNodeIndexLocked(conn core.IConnection) {
 	}
 }
 
+// addDeviceIndexLocked 从连接元数据中提取 deviceID，建立设备级查找索引。
 func (m *Manager) addDeviceIndexLocked(conn core.IConnection) {
 	if conn == nil {
 		return
@@ -108,6 +112,7 @@ func (m *Manager) addDeviceIndexLocked(conn core.IConnection) {
 	}
 }
 
+// Remove 删除连接、清理索引并触发移除钩子。
 func (m *Manager) Remove(id string) error {
 	m.mu.Lock()
 	conn, ok := m.conns[id]
@@ -135,6 +140,7 @@ func (m *Manager) RemoveLink(id string) error {
 	return m.Remove(id)
 }
 
+// removeNodeIndexLocked 从 node 索引中删掉指向当前连接的全部项。
 func (m *Manager) removeNodeIndexLocked(conn core.IConnection) {
 	if conn == nil {
 		return
@@ -146,6 +152,7 @@ func (m *Manager) removeNodeIndexLocked(conn core.IConnection) {
 	}
 }
 
+// removeDeviceIndexLocked 从 device 索引中删掉指向当前连接的全部项。
 func (m *Manager) removeDeviceIndexLocked(conn core.IConnection) {
 	if conn == nil {
 		return
@@ -189,6 +196,7 @@ func (m *Manager) GetLinkByNode(id uint32) (core.ILink, bool) {
 	return conn, true
 }
 
+// UpdateNodeIndex 更新 nodeID 到连接的映射；直连冲突时会主动关闭旧连接。
 func (m *Manager) UpdateNodeIndex(nodeID uint32, conn core.IConnection) {
 	if nodeID == 0 {
 		return
@@ -272,6 +280,7 @@ func (m *Manager) GetLinkByDevice(devID string) (core.ILink, bool) {
 	return conn, true
 }
 
+// UpdateDeviceIndex 更新 deviceID 到连接的映射，供登录后快速反查。
 func (m *Manager) UpdateDeviceIndex(devID string, conn core.IConnection) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -303,6 +312,7 @@ func (m *Manager) UpdateDeviceLink(devID string, link core.ILink) error {
 	return nil
 }
 
+// Range 在释放主锁后遍历连接快照，避免回调期间长时间持锁。
 func (m *Manager) Range(fn func(core.IConnection) bool) {
 	m.mu.RLock()
 	conns := make([]core.IConnection, 0, len(m.conns))
@@ -330,6 +340,7 @@ func (m *Manager) Count() int {
 	return len(m.conns)
 }
 
+// Broadcast 向所有连接尽力广播原始字节，不收集单连接错误。
 func (m *Manager) Broadcast(data []byte) error {
 	m.Range(func(c core.IConnection) bool {
 		_ = c.Send(data)
@@ -338,6 +349,7 @@ func (m *Manager) Broadcast(data []byte) error {
 	return nil
 }
 
+// CloseAll 关闭并清空全部连接与索引，通常用于 server 停止阶段。
 func (m *Manager) CloseAll() error {
 	m.mu.Lock()
 	conns := make([]core.IConnection, 0, len(m.conns))
@@ -362,6 +374,7 @@ func (m *Manager) CloseAll() error {
 	return nil
 }
 
+// asUint32 兼容常见整数元数据类型，便于从动态 meta 中取 nodeID。
 func asUint32(v any) (uint32, bool) {
 	switch vv := v.(type) {
 	case uint32:

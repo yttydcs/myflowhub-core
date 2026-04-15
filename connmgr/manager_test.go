@@ -1,6 +1,6 @@
 package connmgr
 
-// Context: This file provides shared Core framework logic around manager_test.
+// 本文件覆盖 Core 框架中与 `manager` 相关的行为。
 
 import (
 	"context"

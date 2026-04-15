@@ -1,6 +1,6 @@
 package process
 
-// Context: This file provides shared Core framework logic around frame_writer.
+// 本文件承载 Core 框架中与 `frame_writer` 相关的通用逻辑。
 
 import (
 	"encoding/binary"
@@ -15,10 +15,12 @@ type StreamFrameWriter struct{}
 
 var _ core.IFrameWriter = (*StreamFrameWriter)(nil)
 
+// NewStreamFrameWriter 创建一个面向字节流承载的统一帧写入器。
 func NewStreamFrameWriter() *StreamFrameWriter {
 	return &StreamFrameWriter{}
 }
 
+// WriteFrame 直接复用包级写帧逻辑，满足 `core.IFrameWriter` 接口。
 func (w *StreamFrameWriter) WriteFrame(dst io.Writer, codec core.IHeaderCodec, frame core.Frame) error {
 	return WriteFrame(dst, codec, frame)
 }

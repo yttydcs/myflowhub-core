@@ -1,6 +1,6 @@
 package rfcomm_listener
 
-// Context: This file provides shared Core framework logic around connection.
+// 本文件承载 Core 框架中与 `connection` 相关的通用逻辑。
 
 import (
 	"errors"
@@ -27,6 +27,7 @@ type rfcommConnection struct {
 
 var rfcommConnSeq atomic.Uint64
 
+// NewRFCOMMConnection 为 RFCOMM pipe 分配框架连接 ID，并初始化元数据容器。
 func NewRFCOMMConnection(pipe core.IPipe, local, remote net.Addr) (*rfcommConnection, error) {
 	if pipe == nil {
 		return nil, errors.New("nil pipe")
@@ -82,6 +83,7 @@ func (c *rfcommConnection) RemoteAddr() net.Addr { return c.remote }
 func (c *rfcommConnection) Reader() core.IReader     { c.mu.RLock(); defer c.mu.RUnlock(); return c.reader }
 func (c *rfcommConnection) SetReader(r core.IReader) { c.mu.Lock(); c.reader = r; c.mu.Unlock() }
 
+// DispatchReceive 把读取器解码出的帧投递给连接绑定的 receive handler。
 func (c *rfcommConnection) DispatchReceive(h core.IHeader, payload []byte) {
 	c.mu.RLock()
 	recv := c.recvH
@@ -91,10 +93,12 @@ func (c *rfcommConnection) DispatchReceive(h core.IHeader, payload []byte) {
 	}
 }
 
+// Send 直接把原始字节完整写入 RFCOMM pipe。
 func (c *rfcommConnection) Send(data []byte) error {
 	return core.WriteAll(c.pipe, data)
 }
 
+// SendWithHeader 先编码整帧，再经 RFCOMM pipe 发出。
 func (c *rfcommConnection) SendWithHeader(hdr core.IHeader, payload []byte, codec core.IHeaderCodec) error {
 	if codec == nil {
 		return io.ErrNoProgress

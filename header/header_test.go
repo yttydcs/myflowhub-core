@@ -1,6 +1,6 @@
 package header
 
-// Context: This file provides shared Core framework logic around header_test.
+// 本文件覆盖 Core 框架中与 `header` 相关的行为。
 
 import (
 	"bytes"

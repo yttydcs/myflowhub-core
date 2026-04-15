@@ -2,7 +2,7 @@
 
 package rfcomm_listener
 
-// Context: This file provides shared Core framework logic around android_provider.
+// 本文件承载 Core 框架中与 `android_provider` 相关的通用逻辑。
 
 import (
 	"errors"

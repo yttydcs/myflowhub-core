@@ -1,6 +1,6 @@
 package quic_listener
 
-// Context: This file provides shared Core framework logic around dial.
+// 本文件承载 Core 框架中与 `dial` 相关的通用逻辑。
 
 import (
 	"context"
@@ -23,6 +23,7 @@ type DialOptions struct {
 	ClientKeyFile  string
 }
 
+// setDefaults 补齐 QUIC 拨号所需的 ALPN 与默认 ServerName。
 func (o *DialOptions) setDefaults() {
 	if strings.TrimSpace(o.ALPN) == "" {
 		o.ALPN = DefaultALPN
@@ -37,6 +38,7 @@ func (o *DialOptions) setDefaults() {
 	}
 }
 
+// Validate 校验 QUIC 拨号参数是否满足 TLS 与 endpoint 约束。
 func (o DialOptions) Validate() error {
 	if err := validateHostPort(strings.TrimSpace(o.Addr)); err != nil {
 		return err
@@ -75,7 +77,7 @@ func DialEndpoint(ctx context.Context, endpoint string) (core.IConnection, error
 	})
 }
 
-// Dial establishes a QUIC connection and wraps it into core.IConnection.
+// Dial 建立 QUIC 连接并打开单条 stream，再包装成框架连接对象。
 func Dial(ctx context.Context, opts DialOptions) (core.IConnection, error) {
 	opts.setDefaults()
 	if err := opts.Validate(); err != nil {

@@ -1,6 +1,6 @@
 package kit
 
-// Context: This file provides shared Core framework logic around action.
+// 本文件承载 Core 框架中与 `action` 相关的通用逻辑。
 
 import (
 	"context"
@@ -22,6 +22,7 @@ const (
 	ActionKindNotify
 )
 
+// String 返回语义分类的稳定文本，用于日志、测试和可观测输出。
 func (k ActionKind) String() string {
 	switch k {
 	case ActionKindLocal:
@@ -70,16 +71,23 @@ type FuncAction struct {
 	handle      ActionHandler
 }
 
+// Name 返回 action 注册键，供 action 表查找与日志使用。
 func (a *FuncAction) Name() string { return a.name }
+
+// RequireAuth 暴露该 action 是否要求会话已通过鉴权。
 func (a *FuncAction) RequireAuth() bool {
 	return a != nil && a.requireAuth
 }
+
+// Kind 返回工程侧的语义分类，便于做统计、审计或分组展示。
 func (a *FuncAction) Kind() ActionKind {
 	if a == nil {
 		return ActionKindUnknown
 	}
 	return a.kind
 }
+
+// Handle 把调用转交给注入的函数闭包，让简单 action 无需单独声明结构体。
 func (a *FuncAction) Handle(ctx context.Context, conn core.IConnection, hdr core.IHeader, data json.RawMessage) {
 	if a == nil || a.handle == nil {
 		return
@@ -89,6 +97,7 @@ func (a *FuncAction) Handle(ctx context.Context, conn core.IConnection, hdr core
 
 type ActionOption func(*FuncAction)
 
+// WithRequireAuth 显式覆盖 action 的鉴权要求。
 func WithRequireAuth(required bool) ActionOption {
 	return func(a *FuncAction) {
 		if a != nil {
@@ -97,6 +106,7 @@ func WithRequireAuth(required bool) ActionOption {
 	}
 }
 
+// WithKind 手动指定语义分类，覆盖默认的名字推导结果。
 func WithKind(kind ActionKind) ActionOption {
 	return func(a *FuncAction) {
 		if a != nil {

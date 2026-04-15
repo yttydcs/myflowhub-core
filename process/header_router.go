@@ -1,13 +1,13 @@
 package process
 
-// Context: This file provides shared Core framework logic around header_router.
+// 本文件承载 Core 框架中与 `header_router` 相关的通用逻辑。
 
 import (
 	core "github.com/yttydcs/myflowhub-core"
 	"github.com/yttydcs/myflowhub-core/header"
 )
 
-// RouteDecisionKind is the router classification result before any forwarding or local decode happens.
+// RouteDecisionKind 表示只看 header 时得到的路由分类结果。
 type RouteDecisionKind int
 
 const (
@@ -18,6 +18,7 @@ const (
 	RouteDecisionBroadcastChildren
 )
 
+// String 返回决策类型的稳定字符串，便于日志和调试输出。
 func (k RouteDecisionKind) String() string {
 	switch k {
 	case RouteDecisionDrop:
@@ -35,19 +36,21 @@ func (k RouteDecisionKind) String() string {
 	}
 }
 
-// RouteDecision is the header-only routing decision.
+// RouteDecision 表示仅依据 header 做出的路由判定结果。
 type RouteDecision struct {
 	Kind   RouteDecisionKind
 	Reason string
 }
 
-// HeaderRouter decides how the current node should treat a frame by looking only at header metadata.
+// HeaderRouter 只依赖 header 元数据决定当前节点该如何处置一帧数据。
 type HeaderRouter struct{}
 
+// NewHeaderRouter 创建一个仅依赖 header 元数据做快速判定的路由器。
 func NewHeaderRouter() *HeaderRouter {
 	return &HeaderRouter{}
 }
 
+// Decide 在不解析 payload 的前提下给出本节点应丢弃、本地处理还是继续转发的决策。
 func (r *HeaderRouter) Decide(localNodeID uint32, ingress core.ILink, hdr core.IHeader) RouteDecision {
 	_ = ingress
 	if hdr == nil {

@@ -2,7 +2,7 @@
 
 package rfcomm_listener
 
-// Context: This file provides shared Core framework logic around native_windows.
+// 本文件承载 Core 框架中与 `native_windows` 相关的通用逻辑。
 
 import (
 	"context"
@@ -52,6 +52,7 @@ var (
 var wsaOnce sync.Once
 var wsaInitErr error
 
+// ensureWSA 只做一次 Winsock 初始化，供 dial/listen 共用。
 func ensureWSA() error {
 	wsaOnce.Do(func() {
 		var data windows.WSAData
@@ -62,6 +63,7 @@ func ensureWSA() error {
 	return wsaInitErr
 }
 
+// winsockCallErr 把 syscall 返回值规整成更稳定的 Winsock 错误对象。
 func winsockCallErr(err error) error {
 	if err == nil {
 		return windows.WSAEINVAL
@@ -76,6 +78,7 @@ func winsockCallErr(err error) error {
 	return errno
 }
 
+// newRawSockaddrBth 构造与 Windows API 布局兼容的原始蓝牙地址结构。
 func newRawSockaddrBth(btAddr uint64, serviceClass windows.GUID, port uint32) windows.RawSockaddrBth {
 	var raw windows.RawSockaddrBth
 	family := uint16(afBth)
@@ -86,6 +89,7 @@ func newRawSockaddrBth(btAddr uint64, serviceClass windows.GUID, port uint32) wi
 	return raw
 }
 
+// sockaddrBthFromRaw 把系统返回的原始地址结构解码成本地便于访问的版本。
 func sockaddrBthFromRaw(raw *windows.RawSockaddrBth) sockaddrBth {
 	if raw == nil {
 		return sockaddrBth{}
@@ -98,10 +102,12 @@ func sockaddrBthFromRaw(raw *windows.RawSockaddrBth) sockaddrBth {
 	}
 }
 
+// newDialLocalSockaddrBth 生成客户端 bind `BT_PORT_ANY` 时使用的本地地址。
 func newDialLocalSockaddrBth() *windows.SockaddrBth {
 	return &windows.SockaddrBth{}
 }
 
+// newDialRemoteSockaddrBth 按 channel-first 或 UUID-first 规则构造远端地址。
 func newDialRemoteSockaddrBth(btAddr uint64, serviceClass windows.GUID, channel int) *windows.SockaddrBth {
 	sa := &windows.SockaddrBth{BtAddr: btAddr}
 	if channel > 0 {
@@ -112,6 +118,7 @@ func newDialRemoteSockaddrBth(btAddr uint64, serviceClass windows.GUID, channel 
 	return sa
 }
 
+// newDialAddrFromSockaddr 把平台地址回填成框架层更易读的 `Addr`。
 func newDialAddrFromSockaddr(raw *sockaddrBth, uuid string, fallbackChannel int) *Addr {
 	addr := &Addr{UUID: uuid, Channel: fallbackChannel, Role: "dial"}
 	if raw == nil {
@@ -126,6 +133,7 @@ func newDialAddrFromSockaddr(raw *sockaddrBth, uuid string, fallbackChannel int)
 	return addr
 }
 
+// acceptSock 封装原生 accept 调用，并同时拿到对端蓝牙地址。
 func acceptSock(s windows.Handle) (windows.Handle, *sockaddrBth, error) {
 	var raw windows.RawSockaddrBth
 	l := int32(unsafe.Sizeof(raw))
@@ -138,6 +146,7 @@ func acceptSock(s windows.Handle) (windows.Handle, *sockaddrBth, error) {
 	return nfd, &sa, nil
 }
 
+// getsocknameBth 读取 socket 当前绑定的本地蓝牙地址信息。
 func getsocknameBth(s windows.Handle) (*sockaddrBth, error) {
 	var raw windows.RawSockaddrBth
 	l := int32(unsafe.Sizeof(raw))
@@ -149,6 +158,7 @@ func getsocknameBth(s windows.Handle) (*sockaddrBth, error) {
 	return &sa, nil
 }
 
+// setSockSendTimeout 给 Winsock 套接字设置发送超时，避免写入无限阻塞。
 func setSockSendTimeout(s windows.Handle, timeoutMs int) {
 	if s == windows.InvalidHandle || timeoutMs <= 0 {
 		return
@@ -166,6 +176,7 @@ type winSockPipe struct {
 	readScratch []byte
 }
 
+// Read 以缓存包的方式适配 RFCOMM 的分包读语义，向上层暴露标准 io.Reader。
 func (p *winSockPipe) Read(b []byte) (int, error) {
 	if len(b) == 0 {
 		return 0, nil
@@ -187,6 +198,7 @@ func (p *winSockPipe) Read(b []byte) (int, error) {
 	return n, nil
 }
 
+// fillReadCacheLocked 执行一次底层接收，并把结果缓存为后续小块 Read 提供数据。
 func (p *winSockPipe) fillReadCacheLocked() error {
 	if cap(p.readScratch) < winRFCOMMReadChunkBytes {
 		p.readScratch = make([]byte, winRFCOMMReadChunkBytes)
@@ -214,6 +226,7 @@ func (p *winSockPipe) fillReadCacheLocked() error {
 	return nil
 }
 
+// Write 按受控块大小发送数据，规避 Windows RFCOMM 对单次写入长度的限制。
 func (p *winSockPipe) Write(b []byte) (int, error) {
 	if len(b) == 0 {
 		return 0, nil
@@ -238,6 +251,7 @@ func (p *winSockPipe) Write(b []byte) (int, error) {
 	return total, nil
 }
 
+// writeChunkWithFallback 先尝试直接写块，若遇到 `WSAEMSGSIZE` 再退到更小分片。
 func (p *winSockPipe) writeChunkWithFallback(b []byte) (int, error) {
 	n, err := p.writeOnce(b)
 	if err == nil || !errors.Is(err, windows.WSAEMSGSIZE) {
@@ -249,6 +263,7 @@ func (p *winSockPipe) writeChunkWithFallback(b []byte) (int, error) {
 	return p.writeWithMsgSizeFallback(b, n)
 }
 
+// writeOnce 对当前分片执行一次原生发送。
 func (p *winSockPipe) writeOnce(b []byte) (int, error) {
 	var sent uint32
 	buf := windows.WSABuf{
@@ -261,6 +276,7 @@ func (p *winSockPipe) writeOnce(b []byte) (int, error) {
 	return int(sent), nil
 }
 
+// writeWithMsgSizeFallback 在消息过大时逐步缩小块尺寸，直到本次发送可成功完成。
 func (p *winSockPipe) writeWithMsgSizeFallback(b []byte, offset int) (int, error) {
 	if offset < 0 {
 		offset = 0
@@ -305,6 +321,7 @@ func (p *winSockPipe) writeWithMsgSizeFallback(b []byte, offset int) (int, error
 	return total, nil
 }
 
+// Close 幂等关闭底层 socket。
 func (p *winSockPipe) Close() error {
 	if p == nil {
 		return nil
@@ -328,6 +345,7 @@ type winListener struct {
 	svcRegDone atomic.Bool
 }
 
+// dialNative 走 Windows RFCOMM socket API 建立客户端连接，并返回框架可用的 pipe。
 func dialNative(ctx context.Context, opts DialOptions) (core.IPipe, net.Addr, net.Addr, error) {
 	if err := ensureWSA(); err != nil {
 		return nil, nil, nil, err
@@ -385,6 +403,7 @@ func dialNative(ctx context.Context, opts DialOptions) (core.IPipe, net.Addr, ne
 	return pipe, local, remote, nil
 }
 
+// listenNative 创建 Windows RFCOMM 监听 socket，并注册 SDP 服务记录。
 func listenNative(opts Options) (nativeListener, error) {
 	if err := ensureWSA(); err != nil {
 		return nil, err
@@ -447,6 +466,7 @@ func (l *winListener) Addr() net.Addr {
 	return &Addr{UUID: l.uuid, Channel: l.channel, Role: "listen"}
 }
 
+// Accept 接受一个新的 RFCOMM 客户端，并组装本地/远端地址摘要。
 func (l *winListener) Accept() (core.IPipe, net.Addr, net.Addr, error) {
 	if l.closed.Load() {
 		return nil, nil, nil, errors.New("listener closed")
@@ -467,6 +487,7 @@ func (l *winListener) Accept() (core.IPipe, net.Addr, net.Addr, error) {
 	return pipe, local, remote, nil
 }
 
+// Close 删除服务记录并关闭监听 socket。
 func (l *winListener) Close() error {
 	if l == nil {
 		return nil
@@ -485,6 +506,7 @@ func (l *winListener) Close() error {
 	return nil
 }
 
+// registerService 把当前 RFCOMM listener 注册到 Windows 蓝牙服务发现中。
 func (l *winListener) registerService() error {
 	if l.channel <= 0 {
 		return errors.New("rfcomm channel not assigned")
@@ -518,6 +540,7 @@ func (l *winListener) registerService() error {
 	return nil
 }
 
+// deleteService 从 Windows SDP 中撤销当前 listener 的服务记录。
 func (l *winListener) deleteService() error {
 	cs := windows.CSAddrInfo{}
 	qs := windows.WSAQUERYSET{
@@ -542,6 +565,7 @@ const (
 	wsaServiceDelete   wsaSetServiceOp = 2 // RNRSERVICE_DELETE
 )
 
+// wsaSetService 封装 `WSASetServiceW` 调用，统一错误转换。
 func wsaSetService(qs *windows.WSAQUERYSET, op wsaSetServiceOp, flags uint32) error {
 	r0, _, callErr := procWSASetServiceW.Call(uintptr(unsafe.Pointer(qs)), uintptr(op), uintptr(flags))
 	if int32(r0) == -1 {
@@ -550,6 +574,7 @@ func wsaSetService(qs *windows.WSAQUERYSET, op wsaSetServiceOp, flags uint32) er
 	return nil
 }
 
+// bdAddrToBTHAddr 把字符串蓝牙地址转成 Windows BTH_ADDR 使用的整数布局。
 func bdAddrToBTHAddr(bdaddr string) (uint64, error) {
 	bdaddr = strings.TrimSpace(bdaddr)
 	bdaddr, err := normalizeBDAddr(bdaddr)
@@ -573,6 +598,7 @@ func bdAddrToBTHAddr(bdaddr string) (uint64, error) {
 	return uint64(b[0])<<40 | uint64(b[1])<<32 | uint64(b[2])<<24 | uint64(b[3])<<16 | uint64(b[4])<<8 | uint64(b[5]), nil
 }
 
+// bthAddrToBDAddr 把 Windows BTH_ADDR 还原成常见的冒号分隔蓝牙地址。
 func bthAddrToBDAddr(addr uint64) string {
 	return fmt.Sprintf("%02X:%02X:%02X:%02X:%02X:%02X",
 		byte(addr>>40),
@@ -584,6 +610,7 @@ func bthAddrToBDAddr(addr uint64) string {
 	)
 }
 
+// uuidToGUID 将 RFCOMM 服务 UUID 文本转为 Windows API 需要的 GUID 结构。
 func uuidToGUID(uuid string) (windows.GUID, error) {
 	uuid = strings.ToLower(strings.TrimSpace(uuid))
 	if !isUUIDLike(uuid) {

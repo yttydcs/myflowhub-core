@@ -1,6 +1,6 @@
 package eventbus
 
-// Context: This file provides shared Core framework logic around bus.
+// 本文件承载 Core 框架中与 `bus` 相关的通用逻辑。
 
 import (
 	"context"
@@ -66,10 +66,12 @@ func New(opts Options) IBus {
 	}
 }
 
+// normalize 将事件名归一化为内部统一使用的小写键。
 func normalize(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
+// Publish 把事件投递到异步桶队列，由 bucket worker 后台分发。
 func (b *bus) Publish(ctx context.Context, name string, data any, meta map[string]any) error {
 	if b.closed.Load() {
 		return fmt.Errorf("eventbus closed")
@@ -88,6 +90,7 @@ func (b *bus) Publish(ctx context.Context, name string, data any, meta map[strin
 	}
 }
 
+// PublishSync 直接在当前 goroutine 内调用订阅者，适合需要同步可见性的路径。
 func (b *bus) PublishSync(ctx context.Context, name string, data any, meta map[string]any) {
 	if b.closed.Load() {
 		return
@@ -101,6 +104,7 @@ func (b *bus) PublishSync(ctx context.Context, name string, data any, meta map[s
 	bkt.dispatch(ctx, ev)
 }
 
+// Subscribe 为指定事件名注册处理器，并返回可反注册的 token。
 func (b *bus) Subscribe(name string, h Handler) string {
 	if b.closed.Load() {
 		return ""
@@ -118,6 +122,7 @@ func (b *bus) Subscribe(name string, h Handler) string {
 	return token
 }
 
+// Unsubscribe 按 token 移除订阅，避免后续事件继续命中旧 handler。
 func (b *bus) Unsubscribe(name, token string) {
 	key := normalize(name)
 	if key == "" || token == "" {
@@ -131,6 +136,7 @@ func (b *bus) Unsubscribe(name, token string) {
 	}
 }
 
+// Close 停止全部 bucket worker，并拒绝后续 publish/subscribe。
 func (b *bus) Close() {
 	if !b.closed.CompareAndSwap(false, true) {
 		return
@@ -143,6 +149,7 @@ func (b *bus) Close() {
 	b.mu.Unlock()
 }
 
+// getOrCreateBucket 惰性创建事件桶，把不同事件名的队列与 worker 隔离开。
 func (b *bus) getOrCreateBucket(key string) *bucket {
 	b.mu.RLock()
 	if bkt, ok := b.buckets[key]; ok {

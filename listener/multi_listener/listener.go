@@ -1,6 +1,6 @@
 package multi_listener
 
-// Context: This file provides shared Core framework logic around listener.
+// 本文件承载 Core 框架中与 `listener` 相关的通用逻辑。
 
 import (
 	"context"
@@ -28,6 +28,7 @@ type MultiListener struct {
 	closeOnce sync.Once
 }
 
+// New 校验并封装多个子 listener，供 server 统一启动与收敛。
 func New(listeners ...core.IListener) (*MultiListener, error) {
 	if len(listeners) == 0 {
 		return nil, errNoListeners
@@ -46,6 +47,7 @@ func (l *MultiListener) Protocol() string { return "multi" }
 
 func (l *MultiListener) Addr() net.Addr { return nil }
 
+// Listen 并行拉起全部子 listener，并在任一退出时触发整体收敛。
 func (l *MultiListener) Listen(ctx context.Context, cm core.IConnectionManager) error {
 	if l.closed.Load() {
 		return errors.New("multi listener already closed")
@@ -94,6 +96,7 @@ func (l *MultiListener) Listen(ctx context.Context, cm core.IConnectionManager) 
 	return firstErr
 }
 
+// Close 尽力关闭全部子 listener，并返回遇到的首个错误。
 func (l *MultiListener) Close() error {
 	l.closeOnce.Do(func() {
 		l.closed.Store(true)

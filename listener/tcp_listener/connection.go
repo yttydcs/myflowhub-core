@@ -1,6 +1,6 @@
 package tcp_listener
 
-// Context: This file provides shared Core framework logic around connection.
+// 本文件承载 Core 框架中与 `connection` 相关的通用逻辑。
 
 import (
 	"fmt"
@@ -15,6 +15,7 @@ type tcpPipe struct {
 	conn net.Conn
 }
 
+// Read / Write / Close 直接透传到底层 net.Conn，供统一的 pipe 抽象使用。
 func (p *tcpPipe) Read(b []byte) (int, error)  { return p.conn.Read(b) }
 func (p *tcpPipe) Write(b []byte) (int, error) { return p.conn.Write(b) }
 func (p *tcpPipe) Close() error                { return p.conn.Close() }
@@ -30,7 +31,7 @@ type tcpConnection struct {
 	reader core.IReader
 }
 
-// NewTCPConnection wraps a net.Conn into the framework's IConnection implementation.
+// NewTCPConnection 把 `net.Conn` 包装为框架层统一的 `IConnection`。
 func NewTCPConnection(c net.Conn) *tcpConnection {
 	return &tcpConnection{
 		conn: c,
@@ -77,6 +78,7 @@ func (c *tcpConnection) RemoteAddr() net.Addr { return c.conn.RemoteAddr() }
 func (c *tcpConnection) Reader() core.IReader     { c.mu.RLock(); defer c.mu.RUnlock(); return c.reader }
 func (c *tcpConnection) SetReader(r core.IReader) { c.mu.Lock(); c.reader = r; c.mu.Unlock() }
 
+// DispatchReceive 把读取器解码出的帧转交给连接级 receive handler。
 func (c *tcpConnection) DispatchReceive(h core.IHeader, payload []byte) {
 	c.mu.RLock()
 	recv := c.recvH
@@ -86,11 +88,13 @@ func (c *tcpConnection) DispatchReceive(h core.IHeader, payload []byte) {
 	}
 }
 
+// Send 直接透传原始字节写入 TCP 连接。
 func (c *tcpConnection) Send(data []byte) error {
 	_, err := c.conn.Write(data)
 	return err
 }
 
+// SendWithHeader 先编码 header/payload，再写出完整 TCP 帧。
 func (c *tcpConnection) SendWithHeader(hdr core.IHeader, payload []byte, codec core.IHeaderCodec) error {
 	if codec == nil {
 		return io.ErrNoProgress // 表示未提供 codec

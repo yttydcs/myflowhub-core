@@ -1,6 +1,6 @@
 package rfcomm_listener
 
-// Context: This file provides shared Core framework logic around dial.
+// 本文件承载 Core 框架中与 `dial` 相关的通用逻辑。
 
 import (
 	"context"
@@ -18,6 +18,7 @@ type DialOptions struct {
 	Insecure bool
 }
 
+// setDefaults 为 RFCOMM 拨号补齐缺省 UUID 与 adapter。
 func (o *DialOptions) setDefaults() {
 	if strings.TrimSpace(o.UUID) == "" {
 		o.UUID = DefaultRFCOMMUUID
@@ -27,6 +28,7 @@ func (o *DialOptions) setDefaults() {
 	}
 }
 
+// Validate 校验拨号参数是否足够交给平台原生实现。
 func (o DialOptions) Validate() error {
 	if strings.TrimSpace(o.BDAddr) == "" {
 		return errors.New("bdaddr required")
@@ -61,7 +63,7 @@ func DialEndpoint(ctx context.Context, endpoint string) (core.IConnection, error
 	})
 }
 
-// Dial establishes a RFCOMM connection and wraps it into core.IConnection.
+// Dial 建立 RFCOMM 连接，并在原生 pipe 之上包装成框架连接对象。
 func Dial(ctx context.Context, opts DialOptions) (core.IConnection, error) {
 	opts.setDefaults()
 	opts.UUID = strings.ToLower(strings.TrimSpace(opts.UUID))

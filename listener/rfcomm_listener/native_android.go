@@ -2,7 +2,7 @@
 
 package rfcomm_listener
 
-// Context: This file provides shared Core framework logic around native_android.
+// 本文件承载 Core 框架中与 `native_android` 相关的通用逻辑。
 
 import (
 	"context"

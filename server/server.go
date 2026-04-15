@@ -1,6 +1,6 @@
 package server
 
-// Context: This file provides shared Core framework logic around server.
+// 本文件承载 Core 框架中与 `server` 相关的通用逻辑。
 
 import (
 	"context"
@@ -26,10 +26,10 @@ import (
 // ReaderFactory 创建 IReader。
 type ReaderFactory func(conn core.IConnection) core.IReader
 
-// ParentDialer abstracts how to dial the parent link.
+// ParentDialer 抽象父链路的拨号方式。
 //
-// The returned connection must be ready to Add() into the connection manager.
-// Dialer should honor ctx cancellation for timely shutdown.
+// 返回的连接必须已经满足加入连接管理器的条件。
+// 实现方应尊重 ctx 取消，以便服务关闭时能及时退出。
 type ParentDialer func(ctx context.Context, addr string) (core.IConnection, error)
 
 // Options 配置 Server。
@@ -59,10 +59,12 @@ type parentState struct {
 	down   chan struct{}
 }
 
+// hasParent 判断当前配置是否真的启用了父链路，而不是只保留了默认空值。
 func (p *parentState) hasParent() bool {
 	return p != nil && p.enable && p.addr != ""
 }
 
+// setConn 记录当前父连接 ID，并返回一个会在该连接断开时关闭的信号通道。
 func (p *parentState) setConn(id string) <-chan struct{} {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -71,6 +73,7 @@ func (p *parentState) setConn(id string) <-chan struct{} {
 	return p.down
 }
 
+// notifyDown 在父连接被移除时关闭等待通道，唤醒重连循环。
 func (p *parentState) notifyDown(id string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -108,6 +111,7 @@ type Server struct {
 var traceSeq atomic.Uint32
 var traceSeqInit sync.Once
 
+// nextTraceID 惰性初始化随机序列，给发送链路补可观测 trace_id。
 func nextTraceID() uint32 {
 	traceSeqInit.Do(func() {
 		var seed [4]byte
@@ -226,6 +230,7 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// serveConn 为单条连接运行读取循环，并在退出后负责把连接从管理器中摘除。
 func (s *Server) serveConn(conn core.IConnection) {
 	defer s.wg.Done()
 	r := conn.Reader()
@@ -283,18 +288,33 @@ func (s *Server) Stop(ctx context.Context) error {
 	return s.cm.CloseAll()
 }
 
-func (s *Server) Config() core.IConfig                 { return s.cfg }
+// Config 暴露运行时配置，供子协议或外部装配读取。
+func (s *Server) Config() core.IConfig { return s.cfg }
+
+// ConnManager 返回连接管理器，供预路由和业务模块查询连接拓扑。
 func (s *Server) ConnManager() core.IConnectionManager { return s.cm }
-func (s *Server) Process() core.IProcess               { return s.proc }
-func (s *Server) HeaderCodec() core.IHeaderCodec       { return s.codec }
-func (s *Server) NodeID() uint32                       { return s.nodeID.Load() }
-func (s *Server) EventBus() eventbus.IBus              { return s.eb }
+
+// Process 返回当前挂载的处理流程。
+func (s *Server) Process() core.IProcess { return s.proc }
+
+// HeaderCodec 返回当前发送/接收共用的帧编解码器。
+func (s *Server) HeaderCodec() core.IHeaderCodec { return s.codec }
+
+// NodeID 返回当前节点号；该值可能在登录或配置同步后被更新。
+func (s *Server) NodeID() uint32 { return s.nodeID.Load() }
+
+// EventBus 暴露服务内的轻量事件总线。
+func (s *Server) EventBus() eventbus.IBus { return s.eb }
+
+// UpdateNodeID 在运行期切换本节点 ID，但拒绝写入无效的 0 值。
 func (s *Server) UpdateNodeID(id uint32) {
 	if id == 0 {
 		return
 	}
 	s.nodeID.Store(id)
 }
+
+// Send 为单连接发送补齐安全默认字段，并统一经过 process/sender 两层管线。
 func (s *Server) Send(ctx context.Context, connID string, hdr core.IHeader, payload []byte) error {
 	if hdr == nil {
 		return errors.New("header required")
@@ -339,6 +359,7 @@ func (s *Server) Broadcast(ctx context.Context, hdr core.IHeader, payload []byte
 	return firstErr
 }
 
+// runParentLink 维持父链路的长连接与重连循环，使边节点在父节点可用后自动重新挂回。
 func (s *Server) runParentLink(ctx context.Context) {
 	if s.parent == nil || !s.parent.hasParent() {
 		return
@@ -388,6 +409,7 @@ func (s *Server) runParentLink(ctx context.Context) {
 	}
 }
 
+// defaultTCPParentDialer 提供默认的 TCP 父链路拨号实现，供未注入自定义 dialer 时使用。
 func defaultTCPParentDialer(ctx context.Context, addr string) (core.IConnection, error) {
 	var d net.Dialer
 	raw, err := d.DialContext(ctx, "tcp", addr)
@@ -397,6 +419,7 @@ func defaultTCPParentDialer(ctx context.Context, addr string) (core.IConnection,
 	return tcp_listener.NewTCPConnection(raw), nil
 }
 
+// extractConnNodeID 从连接元数据里提取节点号，兼容若干常见整数类型。
 func extractConnNodeID(c core.IConnection) uint32 {
 	if c == nil {
 		return 0
@@ -420,6 +443,7 @@ func extractConnNodeID(c core.IConnection) uint32 {
 	return 0
 }
 
+// buildParentState 从配置构造父链路运行参数，保证缺省时仍有稳定的重连策略。
 func buildParentState(cfg core.IConfig) *parentState {
 	p := &parentState{
 		parentConfig: parentConfig{

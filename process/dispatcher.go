@@ -1,6 +1,6 @@
 package process
 
-// Context: This file provides shared Core framework logic around dispatcher.
+// 本文件承载 Core 框架中与 `dispatcher` 相关的通用逻辑。
 
 import (
 	"context"
@@ -71,7 +71,7 @@ func NewDispatcher(opts DispatchOptions) (*DispatcherProcess, error) {
 	for i := range queues {
 		queues[i] = make(chan dispatchEvent, opts.ChannelBuffer)
 	}
-	if opts.Strategy == nil { // allow future extension in options
+	if opts.Strategy == nil { // 预留策略扩展点，缺省时保持连接哈希语义。
 		opts.Strategy = ConnHashStrategy{}
 	}
 	return &DispatcherProcess{
@@ -185,6 +185,7 @@ func (p *DispatcherProcess) preRoute(ctx context.Context, conn core.IConnection,
 	return true
 }
 
+// selectHandler 先按子协议号命中专用 handler，未命中时回退到默认处理器。
 func (p *DispatcherProcess) selectHandler(hdr core.IHeader) (core.ISubProcess, uint8) {
 	sub, ok := extractSubProto(hdr)
 	if !ok {
@@ -197,6 +198,7 @@ func (p *DispatcherProcess) selectHandler(hdr core.IHeader) (core.ISubProcess, u
 	return h, sub
 }
 
+// callHandler 在单个 worker 内调用具体 handler，并把 panic 收敛到日志，避免拖垮整条分发管线。
 func (p *DispatcherProcess) callHandler(ctx context.Context, handler core.ISubProcess, conn core.IConnection, hdr core.IHeader, payload []byte) {
 	if handler == nil {
 		return
@@ -210,7 +212,7 @@ func (p *DispatcherProcess) callHandler(ctx context.Context, handler core.ISubPr
 	handler.OnReceive(ctx, conn, hdr, payload)
 }
 
-// route 现在仅组合三步。
+// route 串起选路、来源校验和最终调用，是 worker 实际消费事件时的核心路径。
 func (p *DispatcherProcess) route(evt dispatchEvent) {
 	handler, sub := p.selectHandler(evt.hdr)
 	if handler == nil {
@@ -236,6 +238,7 @@ func (p *DispatcherProcess) route(evt dispatchEvent) {
 	}
 }
 
+// extractSubProto 统一处理空 header 场景，避免后续分支重复判空。
 func extractSubProto(h core.IHeader) (uint8, bool) {
 	if h == nil {
 		return 0, false
@@ -243,6 +246,7 @@ func extractSubProto(h core.IHeader) (uint8, bool) {
 	return h.SubProto(), true
 }
 
+// getHandler 在读锁下读取已注册的子协议处理器。
 func (p *DispatcherProcess) getHandler(sub uint8) core.ISubProcess {
 	p.mu.RLock()
 	h := p.handlers[sub]
@@ -250,6 +254,7 @@ func (p *DispatcherProcess) getHandler(sub uint8) core.ISubProcess {
 	return h
 }
 
+// getFallback 返回默认处理器，供未知子协议或空 header 兜底。
 func (p *DispatcherProcess) getFallback() core.ISubProcess {
 	p.mu.RLock()
 	fb := p.fallback
@@ -257,6 +262,7 @@ func (p *DispatcherProcess) getFallback() core.ISubProcess {
 	return fb
 }
 
+// sourceMismatch 把来源校验集中在分发层，避免每个子协议都重复实现“源节点是否可信”的门禁。
 func sourceMismatch(ctx context.Context, h core.ISubProcess, conn core.IConnection, hdr core.IHeader) bool {
 	if h == nil || conn == nil || hdr == nil {
 		return false
@@ -288,6 +294,7 @@ func sourceMismatch(ctx context.Context, h core.ISubProcess, conn core.IConnecti
 	return true
 }
 
+// shouldInterceptCmd 决定 Cmd 帧在 preRoute 已转发后是否还要本地进入 handler。
 func shouldInterceptCmd(h core.ISubProcess, hdr core.IHeader) bool {
 	if h == nil || hdr == nil {
 		return false
@@ -318,6 +325,7 @@ func (p *DispatcherProcess) ConfigSnapshot() (channels, workers, buffer int) {
 	return
 }
 
+// selectQueue 通过当前策略把同类事件稳定映射到固定 worker 队列。
 func (p *DispatcherProcess) selectQueue(conn core.IConnection, hdr core.IHeader) int {
 	return p.strategy.SelectQueue(conn, hdr, p.chanCount)
 }
@@ -350,6 +358,7 @@ func (p *DispatcherProcess) OnReceive(ctx context.Context, conn core.IConnection
 	}
 }
 
+// OnSend 把发送前钩子透明委托给基础流程，便于在同一处做审计或补字段。
 func (p *DispatcherProcess) OnSend(ctx context.Context, conn core.IConnection, hdr core.IHeader, payload []byte) error {
 	if p.base != nil {
 		return p.base.OnSend(ctx, conn, hdr, payload)
@@ -357,12 +366,14 @@ func (p *DispatcherProcess) OnSend(ctx context.Context, conn core.IConnection, h
 	return nil
 }
 
+// OnClose 把连接关闭事件继续传给基础流程，保持生命周期回调一致。
 func (p *DispatcherProcess) OnClose(conn core.IConnection) {
 	if p.base != nil {
 		p.base.OnClose(conn)
 	}
 }
 
+// readPositiveInt 只接受正整数配置，非法值统一回退默认值，避免并发参数被意外配成 0。
 func readPositiveInt(cfg core.IConfig, key string, def int) int {
 	if cfg == nil {
 		return def

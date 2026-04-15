@@ -1,6 +1,6 @@
 package builder
 
-// Context: This file provides shared Core framework logic around builder.
+// 本文件承载 Core 框架中与 `builder` 相关的通用逻辑。
 
 import core "github.com/yttydcs/myflowhub-core"
 

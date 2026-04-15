@@ -1,6 +1,6 @@
 package tcp_listener
 
-// Context: This file provides shared Core framework logic around listener.
+// 本文件承载 Core 框架中与 `listener` 相关的通用逻辑。
 
 import (
 	"context"
@@ -26,6 +26,7 @@ type Options struct {
 	Logger *slog.Logger
 }
 
+// setDefaults 补齐 TCP listener 的默认 keepalive 周期与日志器。
 func (o *Options) setDefaults() {
 	if o.KeepAlivePeriod <= 0 {
 		o.KeepAlivePeriod = 30 * time.Second

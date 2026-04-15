@@ -1,6 +1,6 @@
 package quic_listener
 
-// Context: This file provides shared Core framework logic around connection.
+// 本文件承载 Core 框架中与 `connection` 相关的通用逻辑。
 
 import (
 	"errors"
@@ -29,6 +29,7 @@ func (p *quicPipe) Write(b []byte) (int, error) {
 	return p.stream.Write(b)
 }
 
+// Close 同时关闭 stream 与底层 quic 连接，避免只关单边留下会话泄漏。
 func (p *quicPipe) Close() error {
 	var closeErr error
 	p.closeOnce.Do(func() {
@@ -58,6 +59,7 @@ type quicConnection struct {
 
 var quicConnSeq atomic.Uint64
 
+// NewQUICConnection 为 QUIC 承载分配稳定 ID，并挂上地址与元数据存储。
 func NewQUICConnection(pipe core.IPipe, local, remote net.Addr) (*quicConnection, error) {
 	if pipe == nil {
 		return nil, errors.New("nil pipe")
@@ -125,6 +127,7 @@ func (c *quicConnection) SetReader(r core.IReader) {
 	c.mu.Unlock()
 }
 
+// DispatchReceive 把解码后的帧交给当前连接绑定的 receive handler。
 func (c *quicConnection) DispatchReceive(h core.IHeader, payload []byte) {
 	c.mu.RLock()
 	recv := c.recvH
@@ -134,10 +137,12 @@ func (c *quicConnection) DispatchReceive(h core.IHeader, payload []byte) {
 	}
 }
 
+// Send 直接把原始字节完整写入 QUIC stream。
 func (c *quicConnection) Send(data []byte) error {
 	return core.WriteAll(c.pipe, data)
 }
 
+// SendWithHeader 先编码 header/payload，再通过 QUIC stream 输出整帧。
 func (c *quicConnection) SendWithHeader(hdr core.IHeader, payload []byte, codec core.IHeaderCodec) error {
 	if codec == nil {
 		return io.ErrNoProgress
